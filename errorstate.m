@@ -54,7 +54,7 @@
 
 % Equalities of δvc, δwc, δpc_z in terms of error states in continuous time
 % e3 = [0 0 1]
-% δvc   =  R_c_b*R(q)'*δvr - R_c_b*skew(R(q)'*vr)*δθ
+% δvc   =  R_c_b*R(q)'*δvr + R_c_b*skew(R(q)'*vr)*δθ
 % δwc   = -R_c_b*δbgyro - R_c_b*wn
 % δpc_z = -e3*R_c_b*R(q)'*δpr + e3*R_c_b*skew(R(q)'pr)*δθ
 

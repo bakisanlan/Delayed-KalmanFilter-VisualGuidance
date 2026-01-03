@@ -21,7 +21,7 @@ rng(31)
 dt_imu = 1/200;           % IMU update rate: 200 Hz
 dt_image = 1/30;          % Image update rate: ~30 Hz
 dt_radar = 1/0.5;             % RADAR update rate: 1 Hz
-t_delay = 0/1000;              % Image processing delay: 80 ms
+t_delay = 80/1000;              % Image processing delay: 80 ms
 t_total = 10;             % Total simulation time
 D = round(t_delay / dt_imu);  % Delay in IMU cycles
 

@@ -1,0 +1,419 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+
+\geometry{margin=2.5cm}
+
+\title{Error-State Kalman Filter (ESKF) for Visual Guidance\\
+\large Mathematical Formulation and Implementation}
+\author{Delayed-KalmanFilter-VisualGuidance}
+\date{\today}
+
+% Define custom commands
+\newcommand{\quat}{\mathbf{q}}
+\newcommand{\pr}{\mathbf{p}_r}
+\newcommand{\vr}{\mathbf{v}_r}
+\newcommand{\pbar}{\bar{\mathbf{p}}}
+\newcommand{\bgyr}{\bm{\omega}_b}
+\newcommand{\bacc}{\mathbf{a}_b}
+\newcommand{\R}{\mathbf{R}}
+\newcommand{\I}{\mathbf{I}}
+%\newcommand{\skew}[1]{\left[#1\right]_\times}
+\renewcommand{\skew}[1]{\left[#1\right]_\times}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{State Definitions}
+%==============================================================================
+
+\subsection{Reference Frames}
+\begin{itemize}
+    \item $e$: Earth frame (NED)
+    \item $b$: Body frame (attached to interceptor)
+    \item $c$: Camera plane frame
+    \item $\R(\quat)$: Rotation matrix from body to earth frame
+    \item $\R_{c/b}$: Rotation matrix from body to camera frame (constant)
+\end{itemize}
+
+\subsection{Nominal State Vector (18 states)}
+The nominal state vector is defined as:
+\begin{equation}
+    \mathbf{x} = \begin{bmatrix} \quat \\ \pr \\ \vr \\ \pbar \\ \bgyr \\ \bacc \end{bmatrix}
+    = \begin{bmatrix} 
+        q_0, q_1, q_2, q_3 \\ 
+        p_{r,x}, p_{r,y}, p_{r,z} \\ 
+        v_{r,x}, v_{r,y}, v_{r,z} \\ 
+        \bar{p}_x, \bar{p}_y \\ 
+        \omega_{b,x}, \omega_{b,y}, \omega_{b,z} \\ 
+        a_{b,x}, a_{b,y}, a_{b,z}
+    \end{bmatrix}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $\quat \in \mathbb{R}^4$: Quaternion (attitude), $\quat = [q_0, q_1, q_2, q_3]^T$
+    \item $\pr \in \mathbb{R}^3$: Relative position (earth frame)
+    \item $\vr \in \mathbb{R}^3$: Relative velocity (earth frame)
+    \item $\pbar \in \mathbb{R}^2$: Normalized image coordinates
+    \item $\bgyr \in \mathbb{R}^3$: Gyroscope bias
+    \item $\bacc \in \mathbb{R}^3$: Accelerometer bias
+\end{itemize}
+
+\subsection{Error State Vector (17 states)}
+The error state vector is defined as:
+\begin{equation}
+    \delta\mathbf{x} = \begin{bmatrix} \delta\bm{\theta} \\ \delta\pr \\ \delta\vr \\ \delta\pbar \\ \delta\bgyr \\ \delta\bacc \end{bmatrix}
+    \in \mathbb{R}^{17}
+\end{equation}
+
+where $\delta\bm{\theta} \in \mathbb{R}^3$ is the attitude error represented as an axis-angle vector (instead of 4-element quaternion error).
+
+%==============================================================================
+\section{IMU Measurement Model}
+%==============================================================================
+
+\subsection{True Quantities}
+The true angular velocity and acceleration are related to measurements by:
+\begin{align}
+    \bm{\omega}_t &= \bm{\omega}_m - \bgyr^t - \mathbf{n}_\omega \\
+    \mathbf{a}_t &= \R(\quat_t)(\mathbf{a}_m - \bacc^t - \mathbf{n}_a) + \mathbf{g}
+\end{align}
+
+where:
+\begin{itemize}
+    \item $\bm{\omega}_m$: Measured angular velocity
+    \item $\mathbf{a}_m$: Measured body acceleration
+    \item $\bgyr^t = \bgyr + \delta\bgyr$: True gyroscope bias
+    \item $\bacc^t = \bacc + \delta\bacc$: True accelerometer bias
+    \item $\mathbf{n}_\omega \sim \mathcal{N}(0, \sigma_{\tilde{\omega}n}^2 \I)$: Gyroscope noise
+    \item $\mathbf{n}_a \sim \mathcal{N}(0, \sigma_{\tilde{a}n}^2 \I)$: Accelerometer noise
+\end{itemize}
+
+\subsection{Noise Parameters}
+\begin{table}[h]
+\centering
+\begin{tabular}{ccl}
+\toprule
+Symbol & Units & Description \\
+\midrule
+$\sigma_{\tilde{a}n}$ & $\text{m/s}^2$ & Accelerometer measurement noise std \\
+$\sigma_{\tilde{\omega}n}$ & $\text{rad/s}$ & Gyroscope measurement noise std \\
+$\sigma_{aw}$ & $\text{m/s}^2\sqrt{\text{s}}$ & Accelerometer bias random walk \\
+$\sigma_{\omega w}$ & $\text{rad/s}\sqrt{\text{s}}$ & Gyroscope bias random walk \\
+\bottomrule
+\end{tabular}
+\caption{IMU Noise Parameters}
+\end{table}
+
+%==============================================================================
+\section{Continuous-Time Kinematics}
+%==============================================================================
+
+\subsection{Nominal State Kinematics}
+\begin{align}
+    \dot{\quat} &= \frac{1}{2} \quat \otimes \begin{bmatrix} 0 \\ \bm{\omega}_m - \bgyr \end{bmatrix} \\[8pt]
+    \dot{\pr} &= \vr \\[8pt]
+    \dot{\vr} &= \R(\quat)(\mathbf{a}_m - \bacc) + \mathbf{g} \\[8pt]
+    \dot{\pbar} &= \mathbf{L}_s \begin{bmatrix} \mathbf{v}_c \\ \bm{\omega}_c \end{bmatrix} \\[8pt]
+    \dot{\bgyr} &= \mathbf{0} \\[8pt]
+    \dot{\bacc} &= \mathbf{0}
+\end{align}
+
+where the camera frame quantities are:
+\begin{align}
+    \mathbf{p}_c &= \R_{c/b} \R(\quat)^T (-\pr) \\
+    \mathbf{v}_c &= \R_{c/b} \R(\quat)^T \vr \\
+    \bm{\omega}_c &= \R_{c/b} (\bm{\omega}_m - \bgyr)
+\end{align}
+
+\subsection{IBVS Jacobian Matrix}
+The image feature dynamics use the interaction matrix:
+\begin{equation}
+    \mathbf{L}_s = \begin{bmatrix} \mathbf{L}_v & \mathbf{L}_\omega \end{bmatrix}
+\end{equation}
+
+where:
+\begin{align}
+    \mathbf{L}_v &= \begin{bmatrix}
+        -\frac{1}{p_{c,z}} & 0 & \frac{\bar{p}_x}{p_{c,z}} \\[4pt]
+        0 & -\frac{1}{p_{c,z}} & \frac{\bar{p}_y}{p_{c,z}}
+    \end{bmatrix} \\[10pt]
+    \mathbf{L}_\omega &= \begin{bmatrix}
+        \bar{p}_x \bar{p}_y & -(1+\bar{p}_x^2) & \bar{p}_y \\[4pt]
+        (1+\bar{p}_y^2) & -\bar{p}_x \bar{p}_y & -\bar{p}_x
+    \end{bmatrix}
+\end{align}
+
+\subsection{Continuous Error State Kinematics}
+\begin{align}
+    \delta\dot{\bm{\theta}} &= -\skew{\bm{\omega}_m - \bgyr} \delta\bm{\theta} - \delta\bgyr - \mathbf{n}_\omega \label{eq:dtheta_dot}\\[8pt]
+    \delta\dot{\pr} &= \delta\vr \label{eq:dpr_dot}\\[8pt]
+    \delta\dot{\vr} &= -\R \skew{\mathbf{a}_m - \bacc} \delta\bm{\theta} - \R \delta\bacc - \mathbf{n}_a \label{eq:dvr_dot}\\[8pt]
+    \delta\dot{\pbar} &= \mathbf{A}_{\bar{p}} \delta\pbar + \mathbf{L}_v \delta\mathbf{v}_c + \mathbf{L}_\omega \delta\bm{\omega}_c + \mathbf{A}_{p_{c,z}} \delta p_{c,z} \label{eq:dpbar_dot}\\[8pt]
+    \delta\dot{\bgyr} &= \bm{\omega}_w \label{eq:dbgyr_dot}\\[8pt]
+    \delta\dot{\bacc} &= \mathbf{a}_w \label{eq:dbacc_dot}
+\end{align}
+
+where $\bm{\omega}_w$ and $\mathbf{a}_w$ are the bias random walk noises.
+
+\subsection{Jacobians for $\delta\dot{\pbar}$}
+\begin{align}
+    \mathbf{A}_{\bar{p}} &= \begin{bmatrix}
+        \frac{v_{c,z}}{p_{c,z}} + \bar{p}_y \omega_{c,x} - 2\bar{p}_x \omega_{c,y} & \bar{p}_x \omega_{c,x} + \omega_{c,z} \\[4pt]
+        -\bar{p}_y \omega_{c,y} - \omega_{c,z} & \frac{v_{c,z}}{p_{c,z}} + 2\bar{p}_y \omega_{c,x} - \bar{p}_x \omega_{c,y}
+    \end{bmatrix} \\[10pt]
+    \mathbf{A}_{p_{c,z}} &= \begin{bmatrix}
+        \frac{v_{c,x} - \bar{p}_x v_{c,z}}{p_{c,z}^2} \\[4pt]
+        \frac{v_{c,y} - \bar{p}_y v_{c,z}}{p_{c,z}^2}
+    \end{bmatrix}
+\end{align}
+
+\subsection{Error State Dependencies}
+The camera-frame error states depend on the main error states:
+\begin{align}
+    \delta\mathbf{v}_c &= \R_{c/b} \R^T \delta\vr + \R_{c/b} \skew{\R^T \vr} \delta\bm{\theta} \\[6pt]
+    \delta\bm{\omega}_c &= -\R_{c/b} \delta\bgyr - \R_{c/b} \mathbf{n}_\omega \\[6pt]
+    \delta p_{c,z} &= -\mathbf{e}_3^T \R_{c/b} \R^T \delta\pr - \mathbf{e}_3^T \R_{c/b} \skew{\R^T \pr} \delta\bm{\theta}
+\end{align}
+
+where $\mathbf{e}_3 = [0, 0, 1]^T$.
+
+%==============================================================================
+\section{Continuous-Time Jacobian Matrices}
+%==============================================================================
+
+\subsection{Error State Jacobian $\mathbf{F}_c$ (17$\times$17)}
+The continuous-time error state dynamics can be written as:
+\begin{equation}
+    \delta\dot{\mathbf{x}} = \mathbf{F}_c \delta\mathbf{x} + \mathbf{G}_c \mathbf{n}
+\end{equation}
+
+where the Jacobian $\mathbf{F}_c$ has the structure:
+
+\begin{equation}
+\mathbf{F}_c = \begin{bmatrix}
+    \mathbf{F}_{\theta\theta} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{F}_{\theta b_\omega} & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \I_3 & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+    \mathbf{F}_{v\theta} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{F}_{v b_a} \\
+    \mathbf{F}_{\bar{p}\theta} & \mathbf{F}_{\bar{p}p} & \mathbf{F}_{\bar{p}v} & \mathbf{A}_{\bar{p}} & \mathbf{F}_{\bar{p}b_\omega} & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0}
+\end{bmatrix}
+\end{equation}
+
+\subsection{Jacobian Sub-blocks}
+\begin{align}
+    \mathbf{F}_{\theta\theta} &= -\skew{\bm{\omega}_m - \bgyr} \\[6pt]
+    \mathbf{F}_{\theta b_\omega} &= -\I_3 \\[6pt]
+    \mathbf{F}_{v\theta} &= -\R \skew{\mathbf{a}_m - \bacc} \\[6pt]
+    \mathbf{F}_{v b_a} &= -\R \\[6pt]
+    \mathbf{F}_{\bar{p}\theta} &= \mathbf{L}_v \R_{c/b} \skew{\R^T \vr} + \mathbf{A}_{p_{c,z}} \left(-\mathbf{e}_3^T \R_{c/b} \skew{\R^T \pr}\right) \\[6pt]
+    \mathbf{F}_{\bar{p}p} &= \mathbf{A}_{p_{c,z}} \left(-\mathbf{e}_3^T \R_{c/b} \R^T\right) \\[6pt]
+    \mathbf{F}_{\bar{p}v} &= \mathbf{L}_v \R_{c/b} \R^T \\[6pt]
+    \mathbf{F}_{\bar{p}b_\omega} &= \mathbf{L}_\omega (-\R_{c/b})
+\end{align}
+
+\subsection{Noise Jacobian $\mathbf{G}_c$ (17$\times$12)}
+The noise vector is:
+\begin{equation}
+    \mathbf{n} = \begin{bmatrix} \mathbf{n}_\omega \\ \mathbf{n}_a \\ \bm{\omega}_w \\ \mathbf{a}_w \end{bmatrix} \in \mathbb{R}^{12}
+\end{equation}
+
+The noise Jacobian is:
+\begin{equation}
+\mathbf{G}_c = \begin{bmatrix}
+    -\I_3 & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+    \mathbf{0} & -\R & \mathbf{0} & \mathbf{0} \\
+    \mathbf{L}_\omega(-\R_{c/b}) & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \I_3 & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \mathbf{0} & \I_3
+\end{bmatrix}
+\end{equation}
+
+%==============================================================================
+\section{Discrete-Time Equations}
+%==============================================================================
+
+\subsection{Discretization}
+Using first-order approximation with exact attitude discretization:
+\begin{align}
+    \mathbf{F}_d &= \I_{17} + \mathbf{F}_c \Delta t \\
+    \mathbf{G}_d &= \mathbf{G}_c \Delta t
+\end{align}
+
+For the attitude block, exact exponential map is used:
+\begin{equation}
+    \mathbf{F}_d^{[\theta\theta]} = \exp\left(-\skew{\bm{\omega}} \Delta t\right) = \mathbf{R}(-\bm{\omega} \Delta t)
+\end{equation}
+
+using Rodrigues' formula:
+\begin{equation}
+    \exp(\skew{\bm{\phi}}) = \I \cos\|\bm{\phi}\| + \frac{\sin\|\bm{\phi}\|}{\|\bm{\phi}\|} \skew{\bm{\phi}} + \frac{1-\cos\|\bm{\phi}\|}{\|\bm{\phi}\|^2} \bm{\phi}\bm{\phi}^T
+\end{equation}
+
+\subsection{Discrete Noise Covariances}
+Following the paper notation:
+\begin{align}
+    \mathbf{V}_i &= \sigma_{\tilde{a}n}^2 \Delta t^2 \I_3 \quad [\text{m}^2/\text{s}^2] \label{eq:Vi}\\
+    \bm{\Theta}_i &= \sigma_{\tilde{\omega}n}^2 \Delta t^2 \I_3 \quad [\text{rad}^2] \label{eq:Thetai}\\
+    \mathbf{A}_i &= \sigma_{aw}^2 \Delta t \I_3 \quad [\text{m}^2/\text{s}^4] \label{eq:Ai}\\
+    \bm{\Omega}_i &= \sigma_{\omega w}^2 \Delta t \I_3 \quad [\text{rad}^2/\text{s}^2] \label{eq:Omegai}
+\end{align}
+
+The discrete process noise covariance is:
+\begin{equation}
+    \mathbf{Q}_i = \text{blkdiag}(\bm{\Theta}_i, \mathbf{V}_i, \bm{\Omega}_i, \mathbf{A}_i)
+\end{equation}
+
+%==============================================================================
+\section{ESKF Prediction Step}
+%==============================================================================
+
+\subsection{Nominal State Propagation}
+\begin{align}
+    \quat_{k+1} &= \quat_k \otimes \exp_q\left((\bm{\omega}_m - \bgyr) \Delta t\right) \\
+    {\pr}_{k+1} &= {\pr}_k + \frac{1}{2}({\vr}_k + {\vr}_{k+1}) \Delta t \\
+    {\vr}_{k+1} &= {\vr}_k + \left(\R(\quat_k)(\mathbf{a}_m - \bacc) + \mathbf{g}\right) \Delta t \\
+    {\pbar}_{k+1} &= {\pbar}_k + \left(\mathbf{L}_v \mathbf{v}_c + \mathbf{L}_\omega \bm{\omega}_c\right) \Delta t \\
+    {\bgyr}_{k+1} &= {\bgyr}_k \\
+    {\bacc}_{k+1} &= {\bacc}_k
+\end{align}
+
+where the exponential map for quaternion is:
+\begin{equation}
+    \exp_q(\bm{\phi}) = \begin{bmatrix} \cos\frac{\|\bm{\phi}\|}{2} \\ \frac{\bm{\phi}}{\|\bm{\phi}\|} \sin\frac{\|\bm{\phi}\|}{2} \end{bmatrix}
+\end{equation}
+
+\subsection{Error Covariance Propagation}
+The error state remains at zero during prediction. The covariance propagates as:
+\begin{equation}
+    \mathbf{P}_{k+1}^- = \mathbf{F}_d \mathbf{P}_k \mathbf{F}_d^T + \mathbf{G}_d \mathbf{Q}_c \mathbf{G}_d^T
+\end{equation}
+
+where $\mathbf{Q}_c$ is the continuous-time process noise covariance:
+\begin{equation}
+    \mathbf{Q}_c = \text{diag}\left(\sigma_{\tilde{\omega}n}^2 \I_3, \sigma_{\tilde{a}n}^2 \I_3, \sigma_{\omega w}^2 \I_3, \sigma_{aw}^2 \I_3\right)
+\end{equation}
+
+%==============================================================================
+\section{ESKF Update Step}
+%==============================================================================
+
+\subsection{Measurement Models}
+
+\textbf{Image Measurement:}
+\begin{equation}
+    \mathbf{z}_{\text{img}} = \pbar + \mathbf{v}_{\text{img}}, \quad \mathbf{v}_{\text{img}} \sim \mathcal{N}(\mathbf{0}, \mathbf{R}_{\text{img}})
+\end{equation}
+
+\textbf{RADAR Measurement:}
+\begin{equation}
+    \mathbf{z}_{\text{radar}} = \pr + \mathbf{v}_{\text{radar}}, \quad \mathbf{v}_{\text{radar}} \sim \mathcal{N}(\mathbf{0}, \mathbf{R}_{\text{radar}})
+\end{equation}
+
+\subsection{Measurement Jacobians (Error State)}
+\begin{align}
+    \mathbf{H}_{\text{img}} &= \begin{bmatrix} \mathbf{0}_{2\times 3} & \mathbf{0}_{2\times 3} & \mathbf{0}_{2\times 3} & \I_2 & \mathbf{0}_{2\times 3} & \mathbf{0}_{2\times 3} \end{bmatrix} \in \mathbb{R}^{2 \times 17} \\[8pt]
+    \mathbf{H}_{\text{radar}} &= \begin{bmatrix} \mathbf{0}_{3\times 3} & \I_3 & \mathbf{0}_{3\times 3} & \mathbf{0}_{3\times 2} & \mathbf{0}_{3\times 3} & \mathbf{0}_{3\times 3} \end{bmatrix} \in \mathbb{R}^{3 \times 17}
+\end{align}
+
+\subsection{Kalman Gain}
+\begin{equation}
+    \mathbf{K} = \mathbf{P}^- \mathbf{H}^T \left(\mathbf{H} \mathbf{P}^- \mathbf{H}^T + \mathbf{R}\right)^{-1}
+\end{equation}
+
+\subsection{Error State Update}
+\begin{equation}
+    \delta\hat{\mathbf{x}} = \mathbf{K} \left(\mathbf{z} - \hat{\mathbf{z}}\right)
+\end{equation}
+
+\subsection{Nominal State Injection}
+The error state is injected into the nominal state:
+\begin{align}
+    \quat^+ &= \quat^- \otimes \exp_q(\delta\bm{\theta}) \\
+    \pr^+ &= \pr^- + \delta\pr \\
+    \vr^+ &= \vr^- + \delta\vr \\
+    \pbar^+ &= \pbar^- + \delta\pbar \\
+    \bgyr^+ &= \bgyr^- + \delta\bgyr \\
+    \bacc^+ &= \bacc^- + \delta\bacc
+\end{align}
+
+\subsection{Covariance Update (Joseph Form)}
+\begin{equation}
+    \mathbf{P}^+ = (\I - \mathbf{K}\mathbf{H}) \mathbf{P}^- (\I - \mathbf{K}\mathbf{H})^T + \mathbf{K} \mathbf{R} \mathbf{K}^T
+\end{equation}
+
+\subsection{ESKF Reset}
+After error injection, the covariance is reset:
+\begin{equation}
+    \mathbf{P}^+ \leftarrow \mathbf{G}_r \mathbf{P}^+ \mathbf{G}_r^T
+\end{equation}
+
+where the reset matrix accounts for attitude parametrization:
+\begin{equation}
+    \mathbf{G}_r = \text{blkdiag}\left(\I_3 - \frac{1}{2}\skew{\delta\bm{\theta}}, \I_3, \I_3, \I_2, \I_3, \I_3\right)
+\end{equation}
+
+For small $\delta\bm{\theta}$, $\mathbf{G}_r \approx \I_{17}$.
+
+%==============================================================================
+\section{Summary of State Indices}
+%==============================================================================
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+State & Nominal Index & Error Index \\
+\midrule
+Quaternion / Attitude & 1--4 & 1--3 \\
+Relative Position & 5--7 & 4--6 \\
+Relative Velocity & 8--10 & 7--9 \\
+Image Features & 11--12 & 10--11 \\
+Gyroscope Bias & 13--15 & 12--14 \\
+Accelerometer Bias & 16--18 & 15--17 \\
+\midrule
+\textbf{Total} & \textbf{18} & \textbf{17} \\
+\bottomrule
+\end{tabular}
+\caption{State vector indexing}
+\end{table}
+
+%==============================================================================
+\section{Algorithm Summary}
+%==============================================================================
+
+\begin{algorithm}[H]
+\caption{ESKF Prediction and Update}
+\begin{algorithmic}[1]
+\State \textbf{Input:} $\mathbf{x}_k$, $\mathbf{P}_k$, $\bm{\omega}_m$, $\mathbf{a}_m$, $\mathbf{z}$
+\State \textbf{Prediction:}
+\State \quad Propagate nominal state: $\mathbf{x}_{k+1} = f(\mathbf{x}_k, \bm{\omega}_m, \mathbf{a}_m)$
+\State \quad Compute Jacobians: $\mathbf{F}_d$, $\mathbf{G}_d$
+\State \quad Propagate covariance: $\mathbf{P}_{k+1}^- = \mathbf{F}_d \mathbf{P}_k \mathbf{F}_d^T + \mathbf{G}_d \mathbf{Q}_c \mathbf{G}_d^T$
+\State \textbf{Update (when measurement available):}
+\State \quad Compute innovation: $\bm{\nu} = \mathbf{z} - h(\mathbf{x}_{k+1})$
+\State \quad Compute Kalman gain: $\mathbf{K} = \mathbf{P}^- \mathbf{H}^T (\mathbf{H}\mathbf{P}^-\mathbf{H}^T + \mathbf{R})^{-1}$
+\State \quad Compute error state: $\delta\mathbf{x} = \mathbf{K} \bm{\nu}$
+\State \quad Inject into nominal: $\mathbf{x}^+ = \mathbf{x}^- \oplus \delta\mathbf{x}$
+\State \quad Update covariance (Joseph): $\mathbf{P}^+ = (\I-\mathbf{K}\mathbf{H})\mathbf{P}^-(\I-\mathbf{K}\mathbf{H})^T + \mathbf{K}\mathbf{R}\mathbf{K}^T$
+\State \quad Reset covariance: $\mathbf{P}^+ \leftarrow \mathbf{G}_r \mathbf{P}^+ \mathbf{G}_r^T$
+\State \textbf{Output:} $\mathbf{x}_{k+1}$, $\mathbf{P}_{k+1}$
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}
