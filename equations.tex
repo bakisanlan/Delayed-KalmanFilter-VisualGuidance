@@ -1,0 +1,170 @@
+B. DKF Propagation With IMU Measurements
+1) Quaternion Status Transfer: The discrete-time recurrence relation of state $\mathbf{q}$ is
+
+$$
+\mathbf{q}_k=\mathbf{q}_{k-1} \otimes \Delta \mathbf{q}_{k-1}=\mathbf{M}\left(\Delta \mathbf{q}_{k-1}\right) \mathbf{q}_{k-1}
+$$
+
+where $\mathbf{M}\left(\Delta \mathbf{q}_{k-1}\right)$ is given in Appendix C, ${ }^b \omega$ is the estimated value at time $t_k$, and the relationship with the measured value of the gyroscope is (7).
+
+
+
+Therefore, $\mathbf{F}_{\mathbf{q}_{k-1}}^{\mathbf{q}_k}=\mathbf{M}\left(\Delta \mathbf{q}_{k-1}\right)$. Because the estimated value and the bias of gyroscope have the same order and coefficient, their partial derivatives have the same form
+
+$$
+\begin{aligned}
+\mathbf{F}_{\mathbf{b}_{\mathrm{gyr}, k-1}}^{\mathbf{q}_k} & =\left[\begin{array}{ccc}
+\frac{q_1}{2} & \frac{q_2}{2} & \frac{q_3}{2} \\
+-\frac{q_0}{2} & \frac{q_3}{2} & -\frac{q_2}{2} \\
+-\frac{q_3}{2} & -\frac{q_0}{2} & \frac{q_1}{2} \\
+\frac{q_2}{2} & -\frac{q_1}{2} & -\frac{q_0}{2}
+\end{array}\right] \Delta t \\
+\mathbf{G}_{b_{\omega_{k-1}}}^{\mathbf{q}_k} & =\mathbf{F}_{\mathbf{b}_{\mathrm{gyr}, k-1}}^{\mathbf{q}_k} .
+\end{aligned}
+$$
+
+2) Position and Velocity Status Transfer: For low-cost integrated navigation systems embedded in small multicopters, relative positions are generally used for navigation, while the influence of coning and sculling errors is ignored [37]. The position transfer equation is written as
+
+$$
+\mathbf{p}_{r, k}=\mathbf{p}_{r, k-1}+\frac{1}{2}\left(\mathbf{v}_{r, k-1}+\mathbf{v}_{r, k}\right) \Delta t .
+$$
+
+
+The corresponding state transition matrix is
+
+$$
+\mathbf{F}_{\mathbf{v}_{r, k-1}}^{\mathbf{p}_{r, k}}=\mathbf{I} \Delta t .
+$$
+
+
+Ignoring the angular velocity of the earth's rotation, the velocity (9) is discretized into a transfer equation, and we can get
+
+$$
+\mathbf{v}_{r, k}=\mathbf{v}_{r, k-1}+\left(\mathbf{R}_b^e \cdot{ }^b \mathbf{a}_{k-1}+g \mathbf{e}_3\right) \Delta t
+$$
+
+a coordinate system transformation between the acceleration measurement in BCS and the velocity state in EFCS, there is a transfer relationship between the acceleration and the orientation quaternion, that is,
+
+$$
+\mathbf{F}_{\mathbf{q} k-1}^{\mathbf{v}_{r, k}}=2\left[\begin{array}{lll}
+\mathbf{M}_1{ }^b \mathbf{a} & \mathbf{M}_2{ }^b \mathbf{a} & \mathbf{M}_3{ }^b \mathbf{a}
+\end{array}\right]^{\mathrm{T}} \Delta t
+$$
+
+where ${ }^b \mathbf{a}=\left[\begin{array}{lll}a_{x_b} & a_{y_b} & a_{z_b}\end{array}\right]^{\mathrm{T}}=\mathbf{a}_{\mathrm{acc}}-\mathbf{b}_{\mathrm{acc}}$, and $\mathbf{M}_1-\mathbf{M}_3$ are given in Appendix C.
+
+Since the estimated value and the bias of accelerometer have the same order and coefficient, their partial derivatives have the same form
+
+$$
+\begin{aligned}
+\mathbf{F}_{\mathbf{b}_{\mathrm{acc}, k-1}}^{\mathbf{v}_{r, k}} & =-\mathbf{R}_b^e \Delta t \\
+\mathbf{G}_e^{\mathbf{v}_{e, k}} \mathbf{a}_{k-1} & =\mathbf{F}_{\mathbf{b}_{\mathrm{acc}, k-1}}^{\mathbf{v}_{r, k}}
+\end{aligned}
+$$
+
+3) Image Measurement State Transfer: The IBVS (6) describes the relationship between the change of image feature points and the twist in CCS. Converting the twist in the equation from CCS to BCS and discretizing it, we get the transfer equation of image feature as
+
+$$
+\begin{aligned}
+{ }^i \overline{\mathbf{p}}_k= & { }^i \overline{\mathbf{p}}_{k-1}+\left[\begin{array}{ccc}
+-\frac{1}{p_{z_c}} & 0 & \frac{\bar{p}_{x_i}}{p_{z_c}} \\
+0 & -\frac{1}{p_{z_c}} & \frac{\bar{p}_{y_i}}{p_{z_c}}
+\end{array}\right] \mathbf{R}_c^{b^{\mathrm{T}}} \mathbf{R}_b^{e \mathrm{~T}} \mathbf{v}_{r, k-1} \Delta t \\
+& +\left[\begin{array}{ccc}
+\bar{p}_{x_i} \bar{p}_{y_i} & -\left(1+\bar{p}_{x_i}^2\right) & \bar{p}_{y_i} \\
+1+\bar{p}_{y_i}^2 & -\bar{p}_{x_i} \bar{p}_{y_i} & -\bar{p}_{x_i}
+\end{array}\right] \mathbf{R}_c^{b^{\mathrm{T}}}{ }^b \omega_{k-1} \Delta t
+\end{aligned}
+$$
+
+
+\mathbf{F}_{i \overline{\mathbf{p}}_{k-1}}^i \overline{\mathbf{p}}_k=\mathbf{I}+\left[\begin{array}{cc}
+\frac{v_{z_c}}{p_{z_c}}+\bar{p}_{y_i} \omega_{x_c}-2 \bar{p}_{x_i} \omega_{y_c} & \bar{p}_{x_i} \omega_{x_c}+\omega_{z_c} \\
+-\bar{p}_{y_i} \omega_{y_c}-\omega_{z_c} & \frac{v_{z_c}}{p_{z_c}}+2 \bar{p}_{y_i} \omega_{x_c}-\bar{p}_{x_i} \omega_{y_c}
+\end{array}\right] \Delta t
+
+
+The state transition matrix of the image feature ${ }^i \overline{\mathbf{p}}_k$ to the orientation quaternion $\mathbf{q}_{k-1}$ is
+
+$$
+\mathbf{F}_{\mathbf{q}_{k-1}}^{i \overline{\mathbf{p}}_k}=\frac{1}{p_{z_c}}\left[\begin{array}{ll}
+\mathbf{M}_4 \mathbf{v}_r & \mathbf{M}_5 \mathbf{v}_r
+\end{array}\right]^{\mathrm{T}} \Delta t
+$$
+
+where $\mathbf{M}_4$ and $\mathbf{M}_5$ are given in Appendix C.
+The state transition matrix of the image feature ${ }^i \overline{\mathbf{p}}_k$ to the velocity $\mathbf{v}_{r, k-1}$ is
+
+$$
+\mathbf{F}_{\mathbf{v}_{r, k-1}}^i \overline{\mathbf{p}}_k=\left[\begin{array}{ccc}
+-\frac{1}{p_{z_c}} & 0 & \frac{\bar{p}_{x_i}}{p_{z_c}} \\
+0 & -\frac{1}{p_{z_c}} & \frac{\bar{p}_{y_i}}{p_{z_c}}
+\end{array}\right] \mathbf{R}_c^{b^{\mathrm{T}}} \mathbf{R}_b^{e \mathrm{~T}} \Delta t .
+$$
+
+
+The state transition matrix of the image feature ${ }^i \overline{\mathbf{p}}_k$ of the $k$ th frame to the image feature ${ }^i \overline{\mathbf{p}}_{k-1}$ of the $(k-1)$ th frame is given as (54), as shown at the top of the page.
+
+The state transition matrix and the system noise driving matrix of the image feature ${ }^i \overline{\mathbf{p}}_k$ to the gyroscope bias $\mathbf{b}_{\text {gyr }, k-1}$ are
+
+$$
+\begin{aligned}
+\mathbf{F}_{\mathbf{b}_{\mathrm{gyr}, k-1}}^i \overline{\mathbf{p}}_k & =-\left[\begin{array}{ccc}
+\bar{p}_{x_i} \bar{p}_{y_i} & -\left(1+\bar{p}_{x_i}^2\right) & \bar{p}_{y_i} \\
+1+\bar{p}_{y_i}^2 & -\bar{p}_{x_i} \bar{p}_{y_i} & -\bar{p}_{x_i}
+\end{array}\right] \mathbf{R}_c^{b^{\mathrm{T}}} \\
+\mathbf{G}_{b_{\omega_{k-1}}}^{i \overline{\mathbf{p}}_k} & =\mathbf{F}_{\mathbf{b}_{\mathrm{gyr}, k-1}}^i \overline{\mathbf{p}}_k
+\end{aligned}
+$$
+
+
+Equations (52)-(55) complete the state transition matrix $\mathbf{F}_k$ and the system noise driving matrix $\mathbf{G}_k$, and the state propagation can be realized according to (30) and (31).
+
+\begin{aligned}
+&\text { C. State Recurrence Equations }\\
+&\begin{aligned}
+& \mathbf{M}\left(\Delta \mathbf{q}_{k-1}\right) \\
+&=\left[\begin{array}{cccc}
+1 & -\frac{\omega_{x_b} \Delta t}{2} & -\frac{\omega_{y_b} \Delta t}{2} & -\frac{\omega_{z_b} \Delta t}{2} \\
+\frac{\omega_{x_b} \Delta t}{2} & 1 & \frac{\omega_{z_b} \Delta t}{2} & -\frac{\omega_{y_b} \Delta t}{2} \\
+\frac{\omega_{y_b} \Delta t}{2} & -\frac{\omega_{z_b} \Delta t}{2} & 1 & \frac{\omega_{x_b} \Delta t}{2} \\
+\frac{\omega_{z_b} \Delta t}{2} & \frac{\omega_{y_b} \Delta t}{2} & -\frac{\omega_{x_b} \Delta t}{2} & 1
+\end{array}\right] \\
+& \mathbf{M}_1 \\
+&=\left[\begin{array}{ccc}
+q_0 & -q_3 & q_2 \\
+q_1 & q_2 & q_3 \\
+-q_2 & q_1 & q_0 \\
+-q_3 & -q_0 & q_1
+\end{array}\right] \\
+& \mathbf{M}_2=\left[\begin{array}{ccc}
+q_3 & q_0 & -q_1 \\
+q_2 & -q_1 & -q_0 \\
+q_1 & q_2 & q_3 \\
+q_0 & -q_3 & q_2
+\end{array}\right] \\
+\end{aligned}
+
+
+\begin{aligned}
+\mathbf{M}_3 =\left[\begin{array}{ccc}
+-q_2 & q_1 & q_0 \\
+q_3 & q_0 & -q_1 \\
+-q_0 & q_3 & -q_2 \\
+q_1 & q_2 & q_3
+\end{array}\right] \\
+& \mathbf{M}_4 \\
+& =\left[\begin{array}{ccc}
+2 \bar{p}_{x_i} q_0+2 q_3 & 2 \bar{p}_{x_i} q_3-2 q_0 & -2 \bar{p}_{x_i} q_2-2 q_1 \\
+2 \bar{p}_{x_i} q_1-2 q_2 & 2 \bar{p}_{x_i} q_2+2 q_1 & 2 \bar{p}_{x_i} q_3-2 q_0 \\
+2 \bar{p}_{x_i} q_2-2 q_1 & 2 \bar{p}_{x_i} q_1-2 q_2 & -2 \bar{p}_{x_i} q_0-2 q_3 \\
+2 \bar{p}_{x_i} q_3+2 q_0 & 2 \bar{p}_{x_i} q_0+2 q_3 & 2 \bar{p}_{x_i} q_1-2 q_2
+\end{array}\right] \\
+& \mathbf{M}_5 \\
+& =\left[\begin{array}{ccc}
+2 \bar{p}_{y_i} q_0-2 q_2 & 2 \bar{p}_{y_i} q_3+2 q_1 & -2 \bar{p}_{y_i} q_2-2 q_0 \\
+2 \bar{p}_{y_i} q_1-2 q_3 & 2 \bar{p}_{y_i} q_2+2 q_0 & 2 \bar{p}_{y_i} q_3+2 q_1 \\
+2 \bar{p}_{y_i} q_2-2 q_0 & 2 \bar{p}_{y_i} q_1-2 q_3 & -2 \bar{p}_{y_i} q_0+2 q_2 \\
+2 \bar{p}_{y_i} q_3-2 q_1 & 2 \bar{p}_{y_i} q_0-2 q_2 & 2 \bar{p}_{y_i} q_1-2 q_3
+\end{array}\right] .
+\end{aligned}

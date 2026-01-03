@@ -1,0 +1,15 @@
+% Rotation matrix from sensor frame to world/inertia frame
+% Use that rotation for in all project, rather than built-in function
+% but you can use quat2eul, eul2quat,
+
+%   wRsi1 = [cos(psi_s)  -sin(psi_s)  0    # yaw 
+%            sin(psi_s)   cos(psi_s)  0
+%            0            0           1]
+%
+%   si1Rsi2 = [cos(theta_s)  0   sin(theta_s)  # pitch
+%              0             1   0
+%             -sin(theta_s)  0   cos(theta_s)]  # roll
+%
+%   si2Rs = [1   0           0
+%            0   cos(phi_s) -sin(phi_s)
+%            0   sin(phi_s)  cos(phi_s)]
