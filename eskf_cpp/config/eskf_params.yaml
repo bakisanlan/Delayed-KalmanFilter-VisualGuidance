@@ -1,0 +1,70 @@
+# ============================================================================
+# ESKF Configuration File
+# ============================================================================
+# Error-State Kalman Filter parameters for Visual Guidance
+# Based on "High-Speed Interception Multicopter Control by Image-Based Visual Servoing"
+# ============================================================================
+
+# ROS2 Topic Configuration
+topics:
+  imu: "/mavros/imu/data_raw"
+  image: "/yolo/target"
+  radar: "/radar/pr"
+  output_state: "/eskf/state"
+  output_pose: "/eskf/pose"
+  output_diagnostics: "/eskf/diagnostics"
+
+# Timing Parameters
+timing:
+  imu_rate_hz: 200          # IMU sensor rate [Hz]
+  eskf_rate_hz: 200         # ESKF update rate [Hz] (can be <= imu_rate_hz)
+  image_rate_hz: 30         # Image measurement rate [Hz]
+  radar_rate_hz: 0.5        # Radar measurement rate [Hz]
+  image_delay_ms: 0        # Image processing delay [ms]
+
+# IMU Noise Parameters (Paper Notation)
+#   σ_ãn [m/s²]     : Accelerometer measurement noise std
+#   σ_ω̃n [rad/s]    : Gyroscope measurement noise std
+#   σ_aw [m/s²√s]   : Accelerometer bias random walk
+#   σ_ωw [rad/s√s]  : Gyroscope bias random walk
+imu_noise:
+  sigma_a_n: 0.1           # Accel noise [m/s²] (~10 mg typical MEMS)
+  sigma_omega_n: 0.01      # Gyro noise [rad/s] (~0.57 deg/s)
+  sigma_a_w: 1.0e-4        # Accel bias random walk [m/s²√s]
+  sigma_omega_w: 1.0e-5    # Gyro bias random walk [rad/s√s]
+
+# Sensor Noise Covariances
+measurement_noise:
+  image_sigma: 0.005       # Normalized image coordinate noise (~5 pixels)
+  radar_sigma: 1.0         # RADAR position noise [m]
+
+# Initial State Uncertainties (standard deviations)
+initial_covariance:
+  attitude: 0.05           # ~3° attitude uncertainty [rad]
+  position: 3.0            # Position uncertainty [m]
+  velocity: 0.5            # Velocity uncertainty [m/s]
+  pbar: 0.1                # Image feature uncertainty
+  gyro_bias: 0.005         # Gyro bias uncertainty [rad/s]
+  accel_bias: 0.05         # Accel bias uncertainty [m/s²]
+
+# Camera-to-Body Transformation
+# R_b2c transforms vectors FROM body frame TO camera frame
+# Camera frame: z=forward, x=right, y=down
+# Body frame: x=forward, y=right, z=down (NED)
+camera:
+  R_b2c: [0, 1, 0,         # Camera x = Body y (right)
+          0, 0, 1,         # Camera y = Body z (down)
+          1, 0, 0]         # Camera z = Body x (forward)
+
+# Physical Constants
+constants:
+  gravity: 9.81            # Gravity magnitude [m/s²]
+
+# History Buffer (for delayed measurement handling)
+history:
+  buffer_length: 25        # Number of states to store
+
+# Safety Limits
+safety:
+  max_covariance_trace: 1000.0   # Reset filter if exceeded
+  min_depth_z: 0.1               # Minimum camera depth [m]
