@@ -112,14 +112,14 @@ classdef IMUModel < handle
             obj.omega_b = obj.omega_b_init;
             obj.a_b = obj.a_b_init;
             
-            % === Compute discrete noise covariances ===
-            obj.computeDiscreteCovariances();
+            % % === Compute discrete noise covariances ===
+            obj.computeDiscreteCovariances(obj.dt);
             
             % Print summary
             obj.printSummary();
         end
         
-        function computeDiscreteCovariances(obj)
+        function computeDiscreteCovariances(obj,dt_eskf)
             % Compute discrete noise covariances from paper formulas:
             %   V_i = σ²_an * Δt² * I₃   [m²/s²]
             %   Θ_i = σ²_ωn * Δt² * I₃   [rad²]
@@ -127,16 +127,16 @@ classdef IMUModel < handle
             %   Ω_i = σ²_ωw * Δt * I₃    [rad²/s²]
             
             % V_i: Velocity noise covariance (eq. 262)
-            obj.V_i = obj.sigma_a_n^2 * obj.dt^2 * eye(3);
+            obj.V_i = obj.sigma_a_n^2 * dt_eskf^2 * eye(3);
             
             % Θ_i: Attitude noise covariance (eq. 263)
-            obj.Theta_i = obj.sigma_omega_n^2 * obj.dt^2 * eye(3);
+            obj.Theta_i = obj.sigma_omega_n^2 * dt_eskf^2 * eye(3);
             
             % A_i: Accel bias random walk covariance (eq. 264)
-            obj.A_i = obj.sigma_a_w^2 * obj.dt * eye(3);
+            obj.A_i = obj.sigma_a_w^2 * dt_eskf * eye(3);
             
             % Ω_i: Gyro bias random walk covariance (eq. 265)
-            obj.Omega_i = obj.sigma_omega_w^2 * obj.dt * eye(3);
+            obj.Omega_i = obj.sigma_omega_w^2 * dt_eskf * eye(3);
         end
         
         function [omega_meas, a_meas, omega_b_out, a_b_out] = measure(obj, omega_true, a_true)
@@ -185,7 +185,7 @@ classdef IMUModel < handle
             obj.a_b = obj.a_b_init;
         end
         
-        function Qi = getDiscreteProcessNoise(obj)
+        function Qi = getDiscreteProcessNoise(obj,dt_eskf)
             % Get discrete-time process noise covariance Qi (12x12)
             %
             % Qi = blkdiag(V_i, Θ_i, A_i, Ω_i)
@@ -197,6 +197,10 @@ classdef IMUModel < handle
             % bias RW  % NOTE: CHANGE ORDER
             
             % Qi = blkdiag(obj.V_i, obj.Theta_i, obj.A_i, obj.Omega_i);
+            if nargin>1
+                obj.computeDiscreteCovariances(dt_eskf);
+            end
+
             Qi = blkdiag(obj.Theta_i, obj.V_i, obj.Omega_i, obj.A_i);
 
         end

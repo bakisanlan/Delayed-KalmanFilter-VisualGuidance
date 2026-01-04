@@ -44,7 +44,8 @@ classdef ErrorStateKalmanFilter < handle
         R_radar               % RADAR measurement noise (3x3)
         
         % Timing
-        dt_imu
+        dt_imu                % IMU sampling interval
+        dt_eskf               % ESKF update interval (can differ from dt_imu)
         
         % History buffers for delay handling
         history_length
@@ -63,6 +64,7 @@ classdef ErrorStateKalmanFilter < handle
             % Constructor
             
             obj.dt_imu = params.dt_imu;
+            obj.dt_eskf = params.dt_eskf;
             obj.R_b2c  =  params.R_b2c;
             
             % Process noise (continuous-time)
@@ -109,16 +111,18 @@ classdef ErrorStateKalmanFilter < handle
             % Propagate nominal state
             x_nom_new = obj.predictNominalState(obj.x, omega_meas, a_meas);
             
-            % Compute ESKF Jacobians
+            % Compute ESKF Jacobians using dt_eskf
             [~, Gc, Fd, Gd] = compute_eskf_jacobians(obj.x, omega_meas, a_meas, ...
-                                                     obj.dt_imu, obj.R_b2c);
+                                                     obj.dt_eskf, obj.R_b2c);
+
+            % % Scale process noise by dt_eskf ratio or Gd is already
+            % calculated according to dt_eskf
+            % dt_ratio = obj.dt_eskf / obj.dt_imu;
+            % Qd_scaled = obj.Qd * dt_ratio;
             
-            % Propagate error covariance  % NOTE: CHECK Gd
-            % P_k+1 = Fd * P_k * Fd' + Gd * Qc * Gd'
-            % P_new = Fd * obj.P * Fd' + Gd * obj.Qc * Gd';
+            % Propagate error covariance
             P_new = Fd * obj.P * Fd' + Gc * obj.Qd * Gc';
 
-            
             % Update
             obj.x = x_nom_new;
             obj.P = P_new;
@@ -207,8 +211,13 @@ classdef ErrorStateKalmanFilter < handle
             obj.P = obj.resetCovariance(P_updated, delta_x);
         end
         
-        function x_new = predictNominalState(obj, x, omega_meas, a_meas)
+        function x_new = predictNominalState(obj, x, omega_meas, a_meas, dt)
             % Propagate nominal state using IMU measurements
+            % dt: optional time step (defaults to dt_eskf)
+            
+            if nargin < 5
+                dt = obj.dt_eskf;
+            end
             
             q = x(obj.idx_q);
             p_r = x(obj.idx_pr);
@@ -216,8 +225,6 @@ classdef ErrorStateKalmanFilter < handle
             pbar = x(obj.idx_pbar);
             b_gyr = x(obj.idx_bgyr);
             b_acc = x(obj.idx_bacc);
-            
-            dt = obj.dt_imu;
             
             % Corrected IMU
             omega  = omega_meas - b_gyr;
@@ -303,12 +310,12 @@ classdef ErrorStateKalmanFilter < handle
                 omega_meas = obj.imu_history(1:3, j);
                 a_meas = obj.imu_history(4:6, j);
                 
-                % Propagate nominal state
-                x_reprop = obj.predictNominalState(x_reprop, omega_meas, a_meas);
+                % Propagate nominal state using dt_eskf for history playback
+                x_reprop = obj.predictNominalState(x_reprop, omega_meas, a_meas, obj.dt_eskf);
                 
                 % Propagate covariance
                 [~, Gc, Fd, Gd] = compute_eskf_jacobians(x_reprop, omega_meas, a_meas, ...
-                                                         obj.dt_imu, obj.R_b2c);
+                                                         obj.dt_eskf, obj.R_b2c);
                 % P_reprop = Fd * P_reprop * Fd' + Gd * obj.Qc * Gd';
                 P_reprop = Fd * P_reprop * Fd' + Gc * obj.Qd * Gc';
 

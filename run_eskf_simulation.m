@@ -24,6 +24,7 @@ rng(32)
 %% ======================== SIMULATION PARAMETERS ========================
 % Time settings
 dt_imu = 1/200;           % IMU update rate: 200 Hz
+dt_eskf = 1/200;          % ESKF update rate: 100 Hz (can be different from IMU)
 dt_image = 1/30;          % Image update rate: ~30 Hz
 dt_radar = 1/0.5;         % RADAR update rate: 0.5 Hz
 t_delay = 0/1000;        % Image processing delay: 80 ms
@@ -87,7 +88,7 @@ imu_params.a_b_init = [0.02; -0.01; 0.015];        % a_b(0) [m/s²]
 imu = IMUModel(imu_params);
 
 % Get process noise covariance for ESKF (matches Gc structure)
-Qi = imu.getDiscreteProcessNoise();  % 12x12
+Qi = imu.getDiscreteProcessNoise(dt_eskf);  % 12x12
 Qc = imu.getESKFProcessNoise();
 
 %% ======================== SENSOR NOISE PARAMETERS ========================
@@ -177,6 +178,7 @@ P_init = ErrorStateKalmanFilter.createInitialCovariance(init_sigma);
 % Create ESKF object
 eskf_params = struct();
 eskf_params.dt_imu = dt_imu;
+eskf_params.dt_eskf = dt_eskf;
 eskf_params.R_b2c = R_b2c;
 eskf_params.Qd = Qi;              
 eskf_params.Qc = Qc;  % 12x12 continuous-time process noise
@@ -197,9 +199,16 @@ a_b_log = zeros(3, N_imu);        % True accel bias a_b (evolving)
 
 %% ======================== MAIN SIMULATION LOOP ========================
 fprintf('Starting ESKF Simulation...\n');
-fprintf('Total time: %.1f s, IMU rate: %.0f Hz, Image rate: %.0f Hz, RADAR rate: %.1f Hz\n', ...
-        t_total, 1/dt_imu, 1/dt_image, 1/dt_radar);
+fprintf('Total time: %.1f s, IMU rate: %.0f Hz, ESKF rate: %.0f Hz, Image rate: %.0f Hz, RADAR rate: %.1f Hz\n', ...
+        t_total, 1/dt_imu, 1/dt_eskf, 1/dt_image, 1/dt_radar);
 fprintf('Image delay: %.0f ms (%d IMU cycles)\n\n', t_delay*1000, D);
+
+% ESKF update control
+eskf_update_counter = 0;
+eskf_sample_idx = round(dt_eskf / dt_imu);
+omega_accum = zeros(3, 1);
+a_accum = zeros(3, 1);
+imu_count = 0;
 
 image_update_counter = 0;
 image_sample_idx = round(dt_image / dt_imu);
@@ -224,8 +233,30 @@ for k = 1:N_imu
     x_true(idx_bgyr) = omega_b_true;
     x_true(idx_bacc) = a_b_true;
     
-    %% ==================== ESKF PREDICTION ====================
-    eskf.predict(omega_meas, a_meas, t);
+    
+    %% ==================== ESKF PREDICTION (at dt_eskf rate) ====================
+    % Accumulate IMU measurements
+    omega_accum = omega_accum + omega_meas;
+    a_accum = a_accum + a_meas;
+    imu_count = imu_count + 1;
+    
+    eskf_update_counter = eskf_update_counter + 1;
+    
+    if eskf_update_counter >= eskf_sample_idx
+        eskf_update_counter = 0;
+        
+        % Average accumulated IMU measurements
+        omega_avg = omega_accum / imu_count;
+        a_avg = a_accum / imu_count;
+        
+        % Run ESKF prediction with averaged measurements
+        eskf.predict(omega_avg, a_avg, t);
+        
+        % Reset accumulators
+        omega_accum = zeros(3, 1);
+        a_accum = zeros(3, 1);
+        imu_count = 0;
+    end
     
     %% ==================== ESKF IMAGE CORRECTION (WITH DELAY) ====================
     image_update_counter = image_update_counter + 1;
