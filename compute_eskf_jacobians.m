@@ -157,17 +157,17 @@ function [Fc, Gc, Fd, Gd] = compute_eskf_jacobians(x_nominal, omega_m, a_m, dt, 
     Gc = zeros(17, 12);
     
     % δθ_dot affected by gyro noise: -wn 
-    % Gc(idx_dtheta, 1:3) = -eye(3);
-    Gc(idx_dtheta, 1:3) = eye(3);
+    Gc(idx_dtheta, 1:3) = -eye(3);
+    % Gc(idx_dtheta, 1:3) = eye(3);
 
     
     % δvr_dot affected by accel noise: -R*an, assume R*an = an 
-    % Gc(idx_dvr, 4:6) = -R_b2e;
-    Gc(idx_dvr, 4:6) = eye(3);
+    Gc(idx_dvr, 4:6) = -R_b2e;
+    % Gc(idx_dvr, 4:6) = eye(3);
     
     % δpbar_dot affected by gyro noise through δwc = -R_b2c*wn, assume δwc = -R_b2c*wn 
-    % Gc(idx_dpbar, 1:3) = Lw * (-R_b2c);
-    Gc(idx_dpbar, 1:3) = Lw * eye(3);
+    Gc(idx_dpbar, 1:3) = Lw * (-R_b2c);
+    % Gc(idx_dpbar, 1:3) = Lw * eye(3);
 
     
     % δbgyro_dot affected by bias random walk: ww

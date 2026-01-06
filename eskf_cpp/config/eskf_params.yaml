@@ -36,7 +36,14 @@ imu_noise:
 # Sensor Noise Covariances
 measurement_noise:
   image_sigma: 0.005       # Normalized image coordinate noise (~5 pixels)
-  radar_sigma: 1.0         # RADAR position noise [m]
+  radar_sigma_pos: 1.0     # RADAR position noise [m]
+  radar_sigma_vel: 0.5     # RADAR velocity noise [m/s]
+
+# Chi-Square Gating Thresholds (for outlier rejection)
+# chi2inv(0.9999, DoF) - 99.99% confidence level
+chi2_gating:
+  image_threshold: 18.42   # 2 DoF (pbar_x, pbar_y)
+  radar_threshold: 27.86   # 6 DoF (pr, vr)
 
 # Initial State Uncertainties (standard deviations)
 initial_covariance:

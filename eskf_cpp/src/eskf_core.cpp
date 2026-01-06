@@ -8,6 +8,7 @@
 #include "eskf_cpp/eskf_core.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace eskf {
 
@@ -33,7 +34,11 @@ ErrorStateKalmanFilter::ErrorStateKalmanFilter(const ESKFParams& params)
     
     // Setup measurement noise covariances
     R_img_ = params_.sigma_img * params_.sigma_img * Eigen::Matrix2d::Identity();
-    R_radar_ = params_.sigma_radar * params_.sigma_radar * Eigen::Matrix3d::Identity();
+    
+    // Radar: 6x6 block diagonal for [position; velocity]
+    R_radar_.setZero();
+    R_radar_.block<3,3>(0, 0) = params_.sigma_radar_pos * params_.sigma_radar_pos * Eigen::Matrix3d::Identity();
+    R_radar_.block<3,3>(3, 3) = params_.sigma_radar_vel * params_.sigma_radar_vel * Eigen::Matrix3d::Identity();
     
     // Setup fixed measurement matrices
     H_img_ = getImageMeasurementMatrix();
@@ -224,9 +229,21 @@ Vector2d ErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
     // Innovation
     innovation = z_pbar - z_pred;
     
-    // Kalman gain
+    // Innovation covariance
     const Eigen::Matrix<double, 17, 2> PH_T = P_prior * H_img_.transpose();
     const Eigen::Matrix2d S = H_img_ * PH_T + R_img_;
+    
+    // === Mahalanobis Distance Chi-Square Gating ===
+    // d² = y' * S^(-1) * y follows chi-square with 2 DoF
+    const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
+    
+    if (d_mahal_sq > params_.chi2_threshold_image) {
+        std::printf("[ESKF] IMAGE false detection rejected (Mahalanobis d²=%.2f > %.2f)\n",
+                    d_mahal_sq, params_.chi2_threshold_image);
+        return Vector2d::Zero();
+    }
+    
+    // Kalman gain
     const Eigen::Matrix<double, 17, 2> K = PH_T * S.inverse();
     
     // Error state correction
@@ -253,17 +270,31 @@ Vector2d ErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
 // Radar Correction (no delay)
 // ============================================================================
 
-Vector3d ErrorStateKalmanFilter::correctRadar(const Vector3d& z_radar) {
-    // Predicted measurement (p_r from state)
-    const Vector3d z_pred = state_access::getPosition(x_);
+Vector6d ErrorStateKalmanFilter::correctRadar(const Vector6d& z_radar) {
+    // Predicted measurement [p_r; v_r] from state
+    Vector6d z_pred;
+    z_pred.head<3>() = state_access::getPosition(x_);
+    z_pred.tail<3>() = state_access::getVelocity(x_);
     
     // Innovation
-    const Vector3d innovation = z_radar - z_pred;
+    const Vector6d innovation = z_radar - z_pred;
+    
+    // Innovation covariance
+    const Eigen::Matrix<double, 17, 6> PH_T = P_ * H_radar_.transpose();
+    const Eigen::Matrix<double, 6, 6> S = H_radar_ * PH_T + R_radar_;
+    
+    // === Mahalanobis Distance Chi-Square Gating ===
+    // d² = y' * S^(-1) * y follows chi-square with 6 DoF
+    const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
+    
+    if (d_mahal_sq > params_.chi2_threshold_radar) {
+        std::printf("[ESKF] RADAR false detection rejected (Mahalanobis d²=%.2f > %.2f)\n",
+                    d_mahal_sq, params_.chi2_threshold_radar);
+        return Vector6d::Zero();
+    }
     
     // Kalman gain
-    const Eigen::Matrix<double, 17, 3> PH_T = P_ * H_radar_.transpose();
-    const Eigen::Matrix3d S = H_radar_ * PH_T + R_radar_;
-    const Eigen::Matrix<double, 17, 3> K = PH_T * S.inverse();
+    const Eigen::Matrix<double, 17, 6> K = PH_T * S.inverse();
     
     // Error state correction
     const ErrorState delta_x = K * innovation;
@@ -271,7 +302,7 @@ Vector3d ErrorStateKalmanFilter::correctRadar(const Vector3d& z_radar) {
     // Inject error into nominal state
     x_ = injectErrorState(x_, delta_x);
     
-    // Covariance update (Joseph form)
+    // Covariance update (Joseph form for 6x6 R)
     const StateJacobian I_KH = StateJacobian::Identity() - K * H_radar_;
     ErrorCovariance P_updated = I_KH * P_ * I_KH.transpose() 
                                + K * R_radar_ * K.transpose();
@@ -402,9 +433,11 @@ ImageJacobian ErrorStateKalmanFilter::getImageMeasurementMatrix() const {
 }
 
 RadarJacobian ErrorStateKalmanFilter::getRadarMeasurementMatrix() const {
-    // H_radar: z = p_r, so H maps δpr (indices 3-5 in error state)  
+    // H_radar: z = [p_r; v_r], so H maps [δpr; δvr]
+    // 6x17 Jacobian: first 3 rows for position, next 3 for velocity
     RadarJacobian H = RadarJacobian::Zero();
-    H.block<3,3>(0, error_idx::DPR_START) = Eigen::Matrix3d::Identity();
+    H.block<3,3>(0, error_idx::DPR_START) = Eigen::Matrix3d::Identity();  // Position
+    H.block<3,3>(3, error_idx::DVR_START) = Eigen::Matrix3d::Identity();  // Velocity
     return H;
 }
 

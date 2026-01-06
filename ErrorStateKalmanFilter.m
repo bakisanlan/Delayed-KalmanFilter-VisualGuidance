@@ -41,7 +41,7 @@ classdef ErrorStateKalmanFilter < handle
         Qc                    % Continuous-time process noise (12x12)
         Qd                    % Discrete-time process noise (12x12)
         R_img                 % Image measurement noise (2x2)
-        R_radar               % RADAR measurement noise (3x3)
+        R_radar               % RADAR measurement noise (6x6) - [pr; vr]
         
         % Timing
         dt_imu                % IMU sampling interval
@@ -56,7 +56,7 @@ classdef ErrorStateKalmanFilter < handle
         
         % Measurement matrices for error state
         H_img_err             % Image measurement Jacobian wrt error state (2x17)
-        H_radar_err           % RADAR measurement Jacobian wrt error state (3x17)
+        H_radar_err           % RADAR measurement Jacobian wrt error state (6x17)
     end
     
     methods
@@ -98,9 +98,10 @@ classdef ErrorStateKalmanFilter < handle
             obj.H_img_err = zeros(2, 17);
             obj.H_img_err(1:2, obj.idx_dpbar) = eye(2);
             
-            % RADAR measurement matrix: z = p_r, so H maps δpr
-            obj.H_radar_err = zeros(3, 17);
-            obj.H_radar_err(1:3, obj.idx_dpr) = eye(3);
+            % RADAR measurement matrix: z = [p_r; v_r], so H maps [δpr; δvr]
+            obj.H_radar_err = zeros(6, 17);
+            obj.H_radar_err(1:3, obj.idx_dpr) = eye(3);  % Position
+            obj.H_radar_err(4:6, obj.idx_dvr) = eye(3);  % Velocity
         end
         
         function predict(obj, omega_meas, a_meas, t)
@@ -157,6 +158,22 @@ classdef ErrorStateKalmanFilter < handle
             H = obj.H_img_err;
             R = obj.R_img;
             S = H * P_prior * H' + R;
+
+            % === Mahalanobis Distance Chi-Square Gating ===
+            % Squared Mahalanobis distance: d² = y' * S^(-1) * y
+            % For 2D measurement, d² follows chi-square distribution with 2 DoF
+            d_mahal_sq = innovation' * (S \ innovation);
+            
+            % Chi-square threshold for 99.99% confidence with 2 DoF
+            % chi2inv(0.9999, 2) ≈ 18.42
+            chi2_threshold = 18.42;
+            
+            if d_mahal_sq > chi2_threshold
+                fprintf('False detection rejected (Mahalanobis d²=%.2f > %.2f)\n', ...
+                        d_mahal_sq, chi2_threshold);
+                return
+            end
+
             K = P_prior * H' / S;
             
             % Compute error state correction
@@ -179,13 +196,13 @@ classdef ErrorStateKalmanFilter < handle
         
         function innovation = correctRadar(obj, z_radar)
             % Correction with RADAR measurement (no delay)
-            % z_radar: measured p_r (3x1)
+            % z_radar: measured [p_r; v_r] (6x1)
             
             x_prior = obj.x;
             P_prior = obj.P;
             
-            % Predicted measurement
-            z_pred = x_prior(obj.idx_pr);
+            % Predicted measurement [p_r; v_r]
+            z_pred = [x_prior(obj.idx_pr); x_prior(obj.idx_vr)];
             
             % Innovation
             innovation = z_radar - z_pred;
@@ -194,6 +211,22 @@ classdef ErrorStateKalmanFilter < handle
             H = obj.H_radar_err;
             R = obj.R_radar;
             S = H * P_prior * H' + R;
+            
+            % === Mahalanobis Distance Chi-Square Gating ===
+            % Squared Mahalanobis distance: d² = y' * S^(-1) * y
+            % For 6D measurement, d² follows chi-square distribution with 6 DoF
+            d_mahal_sq = innovation' * (S \ innovation);
+            
+            % Chi-square threshold for 99.99% confidence with 6 DoF
+            % chi2inv(0.9999, 6) ≈ 27.86
+            chi2_threshold = 27.86;
+            
+            if d_mahal_sq > chi2_threshold
+                fprintf('[ESKF] RADAR false detection rejected (Mahalanobis d²=%.2f > %.2f)\n', ...
+                        d_mahal_sq, chi2_threshold);
+                return
+            end
+            
             K = P_prior * H' / S;
             
             % Compute error state correction
@@ -202,7 +235,7 @@ classdef ErrorStateKalmanFilter < handle
             % Apply correction to nominal state
             obj.x = obj.injectErrorState(x_prior, delta_x);
             
-            % Update covariance (Joseph form)
+            % Update covariance (Joseph form for 6x6 R)
             I_KH = eye(17) - K * H;
             P_updated = I_KH * P_prior * I_KH' + K * R * K';
             

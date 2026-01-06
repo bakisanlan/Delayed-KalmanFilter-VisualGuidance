@@ -25,6 +25,7 @@ namespace eskf {
 using Vector2d = Eigen::Vector2d;
 using Vector3d = Eigen::Vector3d;
 using Vector4d = Eigen::Vector4d;
+using Vector6d = Eigen::Matrix<double, 6, 1>;  // For radar [pr; vr]
 using Quaterniond = Eigen::Quaterniond;
 
 // State vectors
@@ -41,11 +42,11 @@ using ProcessNoise = Eigen::Matrix<double, 12, 12>;     ///< Qc, Qd
 
 // Measurement matrices
 using ImageMeasurement = Vector2d;                       ///< pbar measurement
-using RadarMeasurement = Vector3d;                       ///< pr measurement
+using RadarMeasurement = Vector6d;                       ///< [pr; vr] measurement
 using ImageJacobian = Eigen::Matrix<double, 2, 17>;      ///< H_img
-using RadarJacobian = Eigen::Matrix<double, 3, 17>;      ///< H_radar
+using RadarJacobian = Eigen::Matrix<double, 6, 17>;      ///< H_radar (6x17)
 using ImageNoise = Eigen::Matrix2d;                      ///< R_img
-using RadarNoise = Eigen::Matrix3d;                      ///< R_radar
+using RadarNoise = Eigen::Matrix<double, 6, 6>;          ///< R_radar (6x6)
 
 // Rotation matrix
 using RotationMatrix = Eigen::Matrix3d;
@@ -219,7 +220,8 @@ struct ESKFParams {
     
     // Measurement noise
     double sigma_img = 0.005;        ///< Image coordinate noise
-    double sigma_radar = 1.0;        ///< Radar position noise [m]
+    double sigma_radar_pos = 1.0;    ///< Radar position noise [m]
+    double sigma_radar_vel = 0.5;    ///< Radar velocity noise [m/s]
     
     // Camera-to-body rotation (transforms vector from body to camera frame)
     RotationMatrix R_b2c = (RotationMatrix() << 
@@ -237,6 +239,11 @@ struct ESKFParams {
     double init_sigma_pbar = 0.1;        ///< Normalized coordinates
     double init_sigma_bgyr = 0.005;      ///< [rad/s]
     double init_sigma_bacc = 0.05;       ///< [m/s²]
+    
+    // Chi-square gating thresholds (for outlier rejection)
+    // chi2inv(0.9999, DoF) - 99.99% confidence level
+    double chi2_threshold_image = 18.42; ///< 2 DoF image measurement
+    double chi2_threshold_radar = 27.86; ///< 6 DoF radar measurement
 };
 
 // ============================================================================

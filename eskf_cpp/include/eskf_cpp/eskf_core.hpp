@@ -117,13 +117,13 @@ public:
     /**
      * @brief Correction with radar measurement (no delay)
      * 
-     * Radar measures relative position directly:
-     *   z_radar = p_r + noise
+     * Radar measures relative position and velocity directly:
+     *   z_radar = [p_r; v_r] + noise
      * 
-     * @param z_radar Measured relative position in earth frame (3x1)
+     * @param z_radar Measured [position; velocity] in earth frame (6x1)
      * @return Innovation vector (for diagnostics)
      */
-    Vector3d correctRadar(const Vector3d& z_radar);
+    Vector6d correctRadar(const Vector6d& z_radar);
     
     // ========================================================================
     // State Access

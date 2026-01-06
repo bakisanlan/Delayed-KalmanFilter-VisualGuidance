@@ -138,17 +138,17 @@ ESKFJacobians computeESKFJacobians(
     
     jac.Gc.setZero();
     
-    // δθ_dot affected by gyro noise
+    // δθ_dot affected by gyro noise: -I * n_ω
     jac.Gc.block<3,3>(error_idx::DTHETA_START, noise_idx::OMEGA_N_START) = 
-        Eigen::Matrix3d::Identity();
+        -Eigen::Matrix3d::Identity();
     
-    // δvr_dot affected by accel noise (simplified: assume R*an ≈ noise in earth frame)
+    // δvr_dot affected by accel noise: -R_b2e * n_a
     jac.Gc.block<3,3>(error_idx::DVR_START, noise_idx::A_N_START) = 
-        Eigen::Matrix3d::Identity();
+        -R_b2e;
     
-    // δpbar_dot affected by gyro noise through δwc
+    // δpbar_dot affected by gyro noise through δwc = -R_b2c * n_ω
     jac.Gc.block<2,3>(error_idx::DPBAR_START, noise_idx::OMEGA_N_START) = 
-        Lw * Eigen::Matrix3d::Identity();
+        Lw * (-R_b2c);
     
     // δbgyro_dot affected by bias random walk
     jac.Gc.block<3,3>(error_idx::DBGYR_START, noise_idx::OMEGA_W_START) = 
