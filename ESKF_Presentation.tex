@@ -1,0 +1,610 @@
+\documentclass{beamer}
+\usetheme{CambridgeUS}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm}
+\usepackage{booktabs}
+
+% Custom commands
+\newcommand{\quat}{\mathbf{q}}
+\newcommand{\pr}{\mathbf{p}_r}
+\newcommand{\vr}{\mathbf{v}_r}
+\newcommand{\pbar}{\bar{\mathbf{p}}}
+\newcommand{\bgyr}{\bm{\omega}_b}
+\newcommand{\bacc}{\mathbf{a}_b}
+\newcommand{\R}{\mathbf{R}}
+\newcommand{\I}{\mathbf{I}}
+\renewcommand{\skew}[1]{\left[#1\right]_\times}
+
+\title[ESKF Visual Guidance]{Error-State Kalman Filter for Visual Guidance}
+\subtitle{Interactive MATLAB GUI for State Estimation}
+\author{Abdulbaki Sanlan}
+\institute{}
+\date{\today}
+
+\begin{document}
+
+%==============================================================================
+\begin{frame}
+\titlepage
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Outline}
+\tableofcontents
+\end{frame}
+
+%==============================================================================
+\section{Introduction}
+%==============================================================================
+
+\begin{frame}{Visual Overview}
+\begin{center}
+% TODO: Replace with actual scenario diagram
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{5cm}
+\textbf{[Scenario Diagram]}\\[0.3cm]
+\small
+Interceptor $\rightarrow$ Target pursuit in 3D space\\
+Camera (bearing) + Radar (range) + IMU (motion)\\
+Relative state estimation: $\mathbf{p}_r$, $\mathbf{v}_r$, $\mathbf{q}$, $\bar{\mathbf{p}}$, biases
+\vspace{5cm}}}
+\end{center}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Problem Statement}
+\textbf{Scenario:} Autonomous interceptor pursuing a moving target in 3D space
+
+\vspace{0.5cm}
+\textbf{Available Sensors:}
+\begin{itemize}
+    \item \textbf{IMU} (200 Hz): Angular velocity + specific force $\rightarrow$ Dead-reckoning
+    \item \textbf{Camera} (30 Hz): Normalized image coordinates of target
+    \item \textbf{Radar} (0.5 Hz): Relative position measurement
+\end{itemize}
+
+\vspace{0.5cm}
+\textbf{Challenges:}
+\begin{itemize}
+    \item IMU drift due to noise and bias
+    \item Multi-rate sensor fusion
+    \item Nonlinear attitude dynamics
+    \item Potential measurement delays
+\end{itemize}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Why Error-State Kalman Filter?}
+\textbf{Advantages over standard EKF:}
+
+\begin{enumerate}
+    \item \textbf{Natural quaternion handling}
+    \begin{itemize}
+        \item Unit-norm constraint automatically preserved
+        \item No explicit normalization needed
+    \end{itemize}
+    
+    \vspace{0.3cm}
+    \item \textbf{Minimal state dimension}
+    \begin{itemize}
+        \item 17-dim error state vs 18-dim nominal state
+        \item 3-parameter attitude error (not 4-param quaternion)
+    \end{itemize}
+    
+    \vspace{0.3cm}
+    \item \textbf{Better linearization}
+    \begin{itemize}
+        \item Error state always reset to zero
+        \item Linearization around small errors
+    \end{itemize}
+    
+    \vspace{0.3cm}
+    \item \textbf{Flexibility}
+    \begin{itemize}
+        \item Easy multi-rate fusion
+        \item Handles delayed measurements
+    \end{itemize}
+\end{enumerate}
+\end{frame}
+
+%==============================================================================
+\section{ESKF Formulation}
+%==============================================================================
+
+\begin{frame}{State Definitions}
+\textbf{Nominal State (18 dimensions):}
+\begin{equation*}
+    \mathbf{x} = \begin{bmatrix} \quat \\ \pr \\ \vr \\ \pbar \\ \bgyr \\ \bacc \end{bmatrix}
+    \quad
+    \begin{array}{l}
+        \text{Quaternion (4)} \\
+        \text{Relative Position (3)} \\
+        \text{Relative Velocity (3)} \\
+        \text{Pixel Coords (2)} \\
+        \text{Gyro Bias (3)} \\
+        \text{Accel Bias (3)}
+    \end{array}
+\end{equation*}
+
+\vspace{0.5cm}
+\textbf{Error State (17 dimensions):}
+\begin{equation*}
+    \delta\mathbf{x} = \begin{bmatrix} \delta\bm{\theta} \\ \delta\pr \\ \delta\vr \\ \delta\pbar \\ \delta\bgyr \\ \delta\bacc \end{bmatrix}
+    \quad
+    \begin{array}{l}
+        \text{Attitude Error (3)} \\
+        \text{Position Error (3)} \\
+        \text{Velocity Error (3)} \\
+        \text{Pixel Error (2)} \\
+        \text{Gyro Bias Error (3)} \\
+        \text{Accel Bias Error (3)}
+    \end{array}
+\end{equation*}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{IMU Model}
+\textbf{Measurement Model:}
+\begin{align*}
+    \bm{\omega}_m &= \bm{\omega}_{true} + \bgyr + \mathbf{n}_\omega \\
+    \mathbf{a}_m &= \mathbf{a}_{true} + \bacc + \mathbf{n}_a
+\end{align*}
+
+\vspace{0.3cm}
+\textbf{Bias Evolution (Random Walk):}
+\begin{align*}
+    \dot{\bgyr} &= \bm{\omega}_w \\
+    \dot{\bacc} &= \mathbf{a}_w
+\end{align*}
+
+\vspace{0.3cm}
+\textbf{Noise Parameters:}
+\begin{table}
+\centering
+\small
+\begin{tabular}{cl}
+\toprule
+$\sigma_{an}$ & Accel measurement noise [m/s$^2$] \\
+$\sigma_{\omega n}$ & Gyro measurement noise [rad/s] \\
+$\sigma_{aw}$ & Accel bias random walk [$m/s^2 \sqrt{s}$]\\
+$\sigma_{\omega w}$ & Gyro bias random walk [$rad/s \sqrt{s}$] \\
+\bottomrule
+\end{tabular}
+\end{table}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Error State Dynamics}
+\textbf{Continuous-Time Dynamics:}
+\begin{equation*}
+    \delta\dot{\mathbf{x}} = \mathbf{F}_c \delta\mathbf{x} + \mathbf{G}_c \mathbf{n}
+\end{equation*}
+
+\vspace{0.3cm}
+\textbf{State Transition Jacobian $\mathbf{F}_c$ (17$\times$17):}
+\begin{equation*}
+\mathbf{F}_c = \begin{bmatrix}
+    -\skew{\bm{\omega}} & \mathbf{0} & \mathbf{0} & \mathbf{0} & -\I_3 & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \I_3 & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+    -\R\skew{\mathbf{a}} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & -\R \\
+    \mathbf{F}_{\bar{p}\theta} & \mathbf{F}_{\bar{p}p} & \mathbf{F}_{\bar{p}v} & \mathbf{A}_{\bar{p}} & \mathbf{F}_{{\bar{p}}{b\omega}} & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0}
+\end{bmatrix}
+\end{equation*}
+
+\small
+\textit{Fourth row: Image feature dynamics (IBVS interaction matrix)}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Process Noise}
+\textbf{Noise Vector:}
+\begin{equation*}
+    \mathbf{n} = \begin{bmatrix} \mathbf{n}_\omega \\ \mathbf{n}_a \\ \bm{\omega}_w \\ \mathbf{a}_w \end{bmatrix} \in \mathbb{R}^{12}
+\end{equation*}
+
+\vspace{0.5cm}
+\textbf{Process Noise Covariance:}
+\begin{equation*}
+    \mathbf{Q}_c = \text{diag}\left(\sigma_{\omega n}^2 \I_3, \sigma_{an}^2 \I_3, \sigma_{\omega w}^2 \I_3, \sigma_{aw}^2 \I_3\right)
+\end{equation*}
+
+\vspace{0.5cm}
+\begin{block}{Key Point}
+The IMU noise parameters in the GUI directly populate this matrix!
+\end{block}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Measurement Models}
+\textbf{Camera Measurement (30 Hz):}
+\begin{equation*}
+    \mathbf{z}_{\text{img}} = \pbar + \mathbf{v}_{\text{img}}
+\end{equation*}
+\begin{itemize}
+    \item Provides normalized image coordinates
+    \item Good for attitude observability
+\end{itemize}
+
+\vspace{0.1cm}
+\textbf{Radar Measurement (0.5 Hz):}
+\begin{equation*}
+    \mathbf{z}_{\text{radar}} = \pr + \mathbf{v}_{\text{radar}}
+\end{equation*}
+\begin{itemize}
+    \item Provides direct relative position
+    \item Bounds position drift
+\end{itemize}
+
+\vspace{0.1cm}
+\textbf{Measurement Jacobians:}
+\begin{align*}
+    \mathbf{H}_{\text{img}} &= \begin{bmatrix} \mathbf{0} & \mathbf{0} & \mathbf{0} & \I_2 & \mathbf{0} & \mathbf{0} \end{bmatrix} \\
+    \mathbf{H}_{\text{radar}} &= \begin{bmatrix} \mathbf{0} & \I_3 & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} \end{bmatrix}
+\end{align*}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{ESKF Algorithm}
+\begin{columns}
+\begin{column}{0.5\textwidth}
+\textbf{Prediction (at IMU rate):}
+\begin{enumerate}
+    \item Propagate nominal state
+    \begin{align*}
+        \quat_{k+1} &= \quat_k \otimes \exp_q(\bm{\omega_k}\Delta t) \\
+        \mathbf{p}_{r,k+1} &= \mathbf{p}_{r,k} + \mathbf{v}_{r,k} \Delta t \\
+        \mathbf{v}_{r,k+1} &= \mathbf{v}_{r,k} + \mathbf{a}_{ned} \Delta t \\
+        \mathbf{\bar{p}}_{r,k+1} &= (L_{v_k} \bm{v_{r,k}} + L_{\omega_k} \bm{\omega_{k}}) \Delta t  
+    \end{align*}
+    \item Propagate covariance
+    \begin{equation*}
+        \mathbf{P}^- = \mathbf{F}_d \mathbf{P} \mathbf{F}_d^T + \mathbf{Q}_d
+    \end{equation*}
+\end{enumerate}
+\end{column}
+
+\begin{column}{0.5\textwidth}
+\textbf{Update (at meas. rate):}
+\begin{enumerate}
+    \item Compute innovation
+    \begin{equation*}
+        \bm{\nu} = \mathbf{z} - h(\mathbf{x}^-)
+    \end{equation*}
+    \item Compute Kalman gain
+    \begin{equation*}
+        \mathbf{K} = \mathbf{P}^- \mathbf{H}^T \mathbf{S}^{-1}
+    \end{equation*}
+    \item Update error state
+    \begin{equation*}
+        \delta\mathbf{x} = \mathbf{K} \bm{\nu}
+    \end{equation*}
+    \item Inject into nominal
+    \item Update covariance
+\end{enumerate}
+\end{column}
+\end{columns}
+\end{frame}
+
+%==============================================================================
+\section{MATLAB GUI}
+%==============================================================================
+
+\begin{frame}{GUI Overview}
+\begin{center}
+% TODO: Replace with actual screenshot
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}[GUI Overview Screenshot]\vspace{3cm}}}
+\end{center}
+
+\begin{itemize}
+    \item \textbf{Left (70\%):} Visualization area (3D and 2D plots)
+    \item \textbf{Right (30\%):} Configuration panels + controls
+\end{itemize}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{MODEL Panel}
+\begin{columns}
+\begin{column}{0.45\textwidth}
+% TODO: Replace with screenshot
+\fbox{\parbox{\textwidth}{\centering\vspace{3cm}[MODEL Panel]\vspace{3cm}}}
+\end{column}
+
+\begin{column}{0.55\textwidth}
+\textbf{IMU Noise Parameters:}
+\begin{itemize}
+    \item Accel/Gyro measurement noise
+    \item Accel/Gyro bias random walk
+    \item IMU frequency [Hz]
+\end{itemize}
+
+\vspace{0.5cm}
+\textbf{Scenario Settings:}
+\begin{itemize}
+    \item Initial positions (Int/Tgt)
+    \item Initial velocities
+    \item Initial attitude [Y,P,R]
+    \item Max velocity/body rate
+\end{itemize}
+\end{column}
+\end{columns}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{SENSORS Panel}
+\begin{columns}
+\begin{column}{0.45\textwidth}
+% TODO: Replace with screenshot
+\fbox{\parbox{\textwidth}{\centering\vspace{3cm}[SENSORS Panel]\vspace{3cm}}}
+\end{column}
+
+\begin{column}{0.55\textwidth}
+\textbf{Camera Configuration:}
+\begin{itemize}
+    \item Enable/Disable
+    \item Update rate [Hz]
+    \item Image noise $\sigma$
+    \item Processing latency [ms]
+\end{itemize}
+
+\vspace{0.5cm}
+\textbf{Radar Configuration:}
+\begin{itemize}
+    \item Enable/Disable
+    \item Update rate [Hz]
+    \item Position noise $\sigma$ [m]
+\end{itemize}
+
+\vspace{0.3cm}
+\small\textit{Can disable sensors to study observability!}
+\end{column}
+\end{columns}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{FILTER Panel}
+\begin{columns}
+\begin{column}{0.45\textwidth}
+% TODO: Replace with screenshot
+\fbox{\parbox{\textwidth}{\centering\vspace{3cm}[FILTER Panel]\vspace{3cm}}}
+\end{column}
+
+\begin{column}{0.55\textwidth}
+\textbf{Uncertainty Presets:}
+\begin{itemize}
+    \item \textbf{Low:} Small uncertainties
+    \item \textbf{Medium:} Balanced (default)
+    \item \textbf{High:} Large uncertainties
+\end{itemize}
+
+\vspace{0.3cm}
+\textbf{Initial 1-$\sigma$ Values:}
+\begin{itemize}
+    \item Position, Velocity, Attitude
+    \item Image, Gyro Bias, Accel Bias
+\end{itemize}
+
+\vspace{0.3cm}
+\textbf{Initial Errors:}
+\begin{itemize}
+    \item Define true initial estimation error
+    \item Study filter convergence
+\end{itemize}
+\end{column}
+\end{columns}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{RESULTS Panel \& Controls}
+\begin{columns}
+\begin{column}{0.45\textwidth}
+% TODO: Replace with screenshot
+\fbox{\parbox{\textwidth}{\centering\vspace{2.5cm}[RESULTS Panel]\vspace{2.5cm}}}
+\end{column}
+
+\begin{column}{0.55\textwidth}
+\textbf{Plot Views:}
+\begin{enumerate}
+    \item 3D Scenario (with image inset)
+    \item State Estimation (p, v, $\bar{p}$)
+    \item Attitude Estimation
+    \item IMU Bias Estimation
+    \item Covariance Evolution
+\end{enumerate}
+
+\vspace{0.3cm}
+\textbf{Controls:}
+\begin{itemize}
+    \item RUN / STOP / CONTINUE / RESET
+    \item Live Sim toggle
+    \item Pace (speed multiplier)
+    \item SAVE RESULTS
+\end{itemize}
+\end{column}
+\end{columns}
+\end{frame}
+
+%==============================================================================
+\section{Simulation Results}
+%==============================================================================
+
+\begin{frame}{3D Visualization}
+\begin{center}
+% TODO: Replace with actual screenshot
+\fbox{\parbox{0.9\textwidth}{\centering\vspace{4cm}[3D Scenario Screenshot]\vspace{4cm}}}
+\end{center}
+
+\begin{itemize}
+    \item Blue: Interceptor trajectory | Red: Target trajectory
+    \item Cones: True (blue) vs Estimated (red) attitude
+    \item Inset: Image plane $(\bar{p}_x, \bar{p}_y)$
+\end{itemize}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{State Estimation Results}
+\begin{center}
+% TODO: Replace with actual screenshot
+\fbox{\parbox{0.9\textwidth}{\centering\vspace{4cm}[State Estimation Plots]\vspace{4cm}}}
+\end{center}
+
+\begin{itemize}
+    \item Left: True vs Estimated values
+    \item Right: Estimation errors with $\pm 3\sigma$ bounds
+    \item Errors stay within bounds $\Rightarrow$ Filter is consistent
+\end{itemize}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Attitude \& Bias Estimation}
+\begin{columns}
+\begin{column}{0.5\textwidth}
+\centering
+% TODO: Replace
+\fbox{\parbox{0.95\textwidth}{\centering\vspace{2.5cm}[Attitude Plots]\vspace{2.5cm}}}
+\small Euler Angles (Yaw, Pitch, Roll)
+\end{column}
+
+\begin{column}{0.5\textwidth}
+\centering
+% TODO: Replace
+\fbox{\parbox{0.95\textwidth}{\centering\vspace{2.5cm}[Bias Plots]\vspace{2.5cm}}}
+\small Gyro \& Accel Bias Estimation
+\end{column}
+\end{columns}
+
+\vspace{0.5cm}
+\begin{itemize}
+    \item Biases converge toward true values
+    \item Observable through dynamic motion + exteroceptive sensors
+\end{itemize}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Covariance Evolution}
+\begin{center}
+% TODO: Replace with actual screenshot
+\fbox{\parbox{0.9\textwidth}{\centering\vspace{4cm}[Covariance Plots]\vspace{4cm}}}
+\end{center}
+
+\begin{itemize}
+    \item All $\sigma$ values decrease over time
+    \item Filter becomes more confident with more measurements
+    \item Logarithmic scale shows convergence rates
+\end{itemize}
+\end{frame}
+
+%==============================================================================
+\section{Observability Analysis}
+%==============================================================================
+
+\begin{frame}{Observability Analysis - Method}
+\textbf{Observability Gramian:}
+\begin{equation*}
+    \mathbf{L} = \sum_{k=0}^{N} \bm{\Phi}_k^T \mathbf{H}^T \mathbf{H} \bm{\Phi}_k, \quad \bm{\Phi}_k = \mathbf{F}_{d,k-1} \mathbf{F}_{d,k-2} \cdots \mathbf{F}_{d,0}
+\end{equation*}
+
+\vspace{0.1cm}
+\textbf{SVD Decomposition:}
+\begin{equation*}
+    \mathbf{L} = \mathbf{U} \bm{\Sigma} \mathbf{V}^T
+\end{equation*}
+
+\vspace{0.1cm}
+\textbf{Observability Measure for each state:}
+\begin{equation*}
+    \mu_i = \sqrt{\sum_{j=1}^{17} \sigma_j^2 \cdot u_{ij}^2}
+\end{equation*}
+
+\vspace{0.1cm}
+\begin{block}{Key Insight}
+Singular values near zero $\Rightarrow$ Unobservable directions\\
+$\mathbf{U}$ matrix columns show WHICH states are unobservable
+\end{block}
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Observability Results by Sensor Configuration}
+\begin{columns}
+\begin{column}{0.5\textwidth}
+\centering
+% TODO: Replace with actual plot
+\fbox{\parbox{0.95\textwidth}{\centering\vspace{2.5cm}[Observability Measures]\\Singular Values \& State Measures\vspace{2.5cm}}}
+\end{column}
+
+\begin{column}{0.5\textwidth}
+\textbf{Camera + Radar:}
+\begin{itemize}
+    \item \textcolor{green!70!black}{Fully Observable}
+    \item All $\sigma_i > $ threshold
+\end{itemize}
+
+\vspace{0.3cm}
+\textbf{Camera Only:}
+\begin{itemize}
+    \item \textcolor{red}{$\delta\pr$ unobservable}
+    \item \textcolor{red}{$\delta v_{rz}$ unobservable}
+    \item (No range info from camera)
+\end{itemize}
+
+\vspace{0.3cm}
+\textbf{Radar Only:}
+\begin{itemize}
+    \item \textcolor{red}{$\delta\pbar$ unobservable}
+    \item (No image plane info)
+\end{itemize}
+\end{column}
+\end{columns}
+
+\vspace{0.3cm}
+\small\textit{Camera gives bearing, Radar gives range $\rightarrow$ Complementary sensors}
+\end{frame}
+
+%==============================================================================
+\section{Conclusion}
+%==============================================================================
+
+\begin{frame}{Summary}
+\textbf{What we built:}
+\begin{itemize}
+    \item 17-dimensional ESKF for visual guidance
+    \item Fuses IMU (200 Hz) + Camera (30 Hz) + Radar (0.5 Hz)
+    \item Estimates: attitude, position, velocity, image features, IMU biases
+\end{itemize}
+
+\vspace{0.5cm}
+\textbf{Interactive GUI features:}
+\begin{itemize}
+    \item Real-time 3D visualization with image plane inset
+    \item Adjustable IMU noise, sensor configs, filter settings
+    \item Multiple plot views for comprehensive analysis
+    \item Save results for post-processing
+\end{itemize}
+
+\vspace{0.5cm}
+\textbf{Key takeaway:}\\
+ESKF provides robust, consistent estimation with natural quaternion handling and efficient multi-rate sensor fusion.
+\end{frame}
+
+%==============================================================================
+\begin{frame}{Future Work}
+\begin{itemize}
+    \item Implement UKF for comparison
+    \item Add more sensors (GPS, magnetometer)
+    \item Adaptive estimation for maneuvering targets
+    \item Real hardware integration
+    \item Monte Carlo analysis tools
+\end{itemize}
+
+\vspace{1cm}
+\begin{center}
+\Large\textbf{Thank You!}
+
+\vspace{0.5cm}
+\normalsize Questions?
+\end{center}
+\end{frame}
+
+\end{document}

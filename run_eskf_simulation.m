@@ -3,7 +3,8 @@
 % by Kun Yang et al.
 %
 % This script demonstrates the ESKF observer for estimating:
-% - Interceptor attitude (quaternion via error-state axis-angle)
+% - Interceptor att+
+% +itude (quaternion via error-state axis-angle)
 % - Relative position and velocity
 % - Normalized image feature coordinates
 % - IMU biases (gyroscope and accelerometer)
@@ -28,12 +29,15 @@ dt_eskf = 1/200;          % ESKF update rate: 100 Hz (can be different from IMU)
 dt_image = 1/30;          % Image update rate: ~30 Hz
 dt_radar = 1/0.5;         % RADAR update rate: 0.5 Hz
 t_delay = 0/1000;        % Image processing delay: 80 ms
-t_total = 25;             % Total simulation time
+t_total = 40;             % Total simulation time
 D = round(t_delay / dt_imu);  % Delay in IMU cycles
 
 % Flag for measurement devices
 useRadar = true;
 useCam   = true;
+
+%False detection generation
+false_detection_rand_rate = 0.1;
 
 % Time vectors
 t_imu = 0:dt_imu:t_total;
@@ -93,7 +97,7 @@ Qc = imu.getESKFProcessNoise();
 
 %% ======================== SENSOR NOISE PARAMETERS ========================
 % Image sensor noise
-sigma_img = 0.005;        % Normalized image coordinate noise (~5 pixels)
+sigma_img = 0.01;        % Normalized image coordinate noise (~5 pixels)
 
 % RADAR noise
 sigma_radar = 1;          % RADAR position noise: 5 meters
@@ -110,11 +114,11 @@ p_int = [0; 0; -65];          % Interceptor position (NED)
 v_int = [0; 0; 0];            % Interceptor velocity
 
 % Attitude (level, pointing toward target)
-yaw_init = 0;
+yaw_init = deg2rad(30);
 q_true = eul2quat([yaw_init, 0, 0], 'ZYX')';
 
 % ===== TARGET INITIAL STATE =====
-p_tgt = [50; 10; -40];        % Target position
+p_tgt = [100; 10; -40];        % Target position
 v_tgt = [0; 0; 0];            % Target velocity
 
 % ===== RELATIVE STATE =====
@@ -168,7 +172,7 @@ init_sigma = struct();
 init_sigma.attitude   = 0.05;     % ~3° attitude uncertainty (radians for δθ)
 init_sigma.position   = 3;        % 3m position uncertainty
 init_sigma.velocity   = 0.5;      % 0.5 m/s velocity uncertainty
-init_sigma.pbar       = 0.1;      % Image feature uncertainty
+init_sigma.pbar       = 0.01;      % Image feature uncertainty
 init_sigma.b_gyr      = 0.005;    % Gyro bias uncertainty (rad/s)
 init_sigma.b_acc      = 0.05;     % Accel bias uncertainty (m/s²)
 
@@ -271,7 +275,14 @@ for k = 1:N_imu
             if p_r_cam_delayed(3) > 2
                 z_meas = [p_r_cam_delayed(1)/p_r_cam_delayed(3); 
                          p_r_cam_delayed(2)/p_r_cam_delayed(3)] + sigma_img * randn(2,1);
-                
+
+                % false detection 
+                rand_num = rand(1);
+                if rand_num < false_detection_rand_rate
+                    z_meas = z_meas + sqrt(abs(eskf.P(10,10)))*100*randn(2,1);
+                    disp('false detection added')
+                end
+
                 eskf.correctImage(z_meas, D);
             end
         end

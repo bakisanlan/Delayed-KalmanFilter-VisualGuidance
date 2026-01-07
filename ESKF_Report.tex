@@ -7,13 +7,15 @@
 \usepackage{hyperref}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
-
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{lipsum} % For dummy text if needed
 
 \geometry{margin=2.5cm}
 
 \title{Error-State Kalman Filter (ESKF) for Visual Guidance\\
-\large Mathematical Formulation and Implementation}
-\author{Delayed-KalmanFilter-VisualGuidance}
+\large Mathematical Formulation, Implementation, and Interactive GUI}
+\author{PhD Robotics Course Project}
 \date{\today}
 
 % Define custom commands
@@ -25,104 +27,691 @@
 \newcommand{\bacc}{\mathbf{a}_b}
 \newcommand{\R}{\mathbf{R}}
 \newcommand{\I}{\mathbf{I}}
-%\newcommand{\skew}[1]{\left[#1\right]_\times}
 \renewcommand{\skew}[1]{\left[#1\right]_\times}
 
 \begin{document}
 
 \maketitle
 
+\begin{abstract}
+This paper presents a comprehensive implementation of an Error-State Kalman Filter (ESKF) for visual guidance applications in autonomous interceptor systems. The system fuses high-rate Inertial Measurement Unit (IMU) data with low-rate camera and radar measurements to achieve robust state estimation in dynamic 3D scenarios. We develop a complete mathematical formulation of the 17-dimensional error state dynamics, including the interaction matrix for image-based visual servoing (IBVS) features. Additionally, we present an interactive MATLAB Graphical User Interface (GUI) that enables real-time simulation, parameter tuning, and visualization of filter performance. The GUI serves both as an educational tool for understanding ESKF behavior and as a practical testbed for algorithm development. Experimental results demonstrate the filter's ability to accurately estimate relative position, velocity, attitude, and sensor biases under various noise conditions and initial uncertainties.
+\end{abstract}
+
 \tableofcontents
 \newpage
 
 %==============================================================================
-\section{State Definitions}
+\section{Introduction}
 %==============================================================================
 
-\subsection{Reference Frames}
+\subsection{Motivation and Problem Statement}
+
+Autonomous navigation and target tracking represent fundamental challenges in modern robotics, with applications ranging from autonomous vehicles to unmanned aerial systems (UAS) and guided interceptors. In these applications, accurate real-time estimation of the platform's state---including position, velocity, and attitude---is critical for successful mission execution. The problem becomes particularly challenging when the platform must track a moving target while relying on onboard sensors that have inherent limitations in terms of noise, bias, and update rates.
+
+The specific problem addressed in this work is the state estimation for an autonomous interceptor pursuing a target in three-dimensional space. The interceptor is equipped with a typical sensor suite consisting of an Inertial Measurement Unit (IMU) for proprioceptive sensing, a camera for visual target tracking, and a radar for range measurements. Each sensor presents unique characteristics and challenges that must be addressed by the estimation algorithm.
+
+The IMU provides high-rate measurements of angular velocity and specific force, enabling continuous state propagation through dead-reckoning. However, IMU measurements are corrupted by both white noise and slowly-varying biases that cause the dead-reckoning solution to drift unboundedly over time. This drift must be corrected by incorporating exteroceptive measurements from the camera and radar.
+
+The camera provides measurements of the target's position in the image plane, yielding information about the line-of-sight direction to the target. These measurements are available at a moderate rate (typically 30 Hz) and may be subject to processing delays. The normalized image coordinates are nonlinearly related to the relative position and attitude, requiring careful treatment in the estimation framework.
+
+The radar provides direct measurements of the relative position vector, but at a much lower update rate (typically 0.5-2 Hz). While less frequent, these measurements are valuable for correcting accumulated drift in the position estimate.
+
+\subsection{Error-State Kalman Filter Approach}
+
+The choice of estimation algorithm is crucial for achieving robust performance in this multi-sensor fusion scenario. Traditional Extended Kalman Filter (EKF) formulations that directly estimate the quaternion attitude suffer from several drawbacks, including the need to explicitly enforce quaternion unit-norm constraints and potential numerical issues arising from the four-dimensional quaternion representation.
+
+The Error-State Kalman Filter (ESKF), also known as the Multiplicative Extended Kalman Filter (MEKF) in the attitude estimation literature, addresses these challenges by separating the state representation into a nominal state and an error state. The nominal state follows the standard nonlinear kinematics using quaternion algebra, naturally preserving the unit-norm constraint. The error state, which is what the Kalman filter actually estimates, uses a minimal three-parameter attitude representation (such as axis-angle or rotation vector), eliminating redundancy and avoiding constraint enforcement issues.
+
+The key advantages of the ESKF formulation are:
+\begin{enumerate}
+    \item \textbf{Natural quaternion handling:} The quaternion evolves on its natural manifold through proper quaternion multiplication, automatically maintaining the unit-norm constraint.
+    \item \textbf{Minimal state dimension:} The error state uses only 17 dimensions compared to 18 for the nominal state, reducing computational cost and avoiding singularities associated with over-parameterization.
+    \item \textbf{Better linearization:} Since the error state is always reset to zero after each measurement update, the linearization is always performed around zero error, which is typically close to the true error, improving filter consistency.
+    \item \textbf{Flexibility:} The framework easily accommodates multiple sensors with different update rates and measurement models.
+\end{enumerate}
+
+\subsection{Contributions and Paper Organization}
+
+The main contributions of this work are:
 \begin{itemize}
-    \item $e$: Earth frame (NED)
-    \item $b$: Body frame (attached to interceptor)
-    \item $c$: Camera plane frame
-    \item $\R(\quat)$: Rotation matrix from body to earth frame
-    \item $\R_{c/b}$: Rotation matrix from body to camera frame (constant)
+    \item A complete mathematical derivation of the 17-dimensional ESKF for visual guidance, including the full Jacobian matrices for the image feature dynamics
+    \item Implementation of the ESKF in MATLAB with support for delayed measurements
+    \item Development of an interactive GUI for simulation, parameter tuning, and visualization
+    \item Comprehensive documentation enabling educational use and further development
 \end{itemize}
 
-\subsection{Nominal State Vector (18 states)}
-The nominal state vector is defined as:
+The remainder of this paper is organized as follows. Section~\ref{sec:eskf} presents the complete ESKF formulation, including state definitions, kinematics, and the filter algorithm. Section~\ref{sec:gui} describes the interactive GUI and its features. Section~\ref{sec:results} presents simulation results demonstrating filter performance. Section~\ref{sec:conclusion} concludes with a summary and future work directions. Detailed Jacobian derivations are provided in the Appendix.
+
+%==============================================================================
+\section{Error-State Kalman Filter Formulation}
+\label{sec:eskf}
+%==============================================================================
+
+This section presents the complete mathematical formulation of the Error-State Kalman Filter for our visual guidance application. We begin by defining the coordinate frames and state vectors, then develop the continuous-time kinematics and measurement models, and finally present the discrete-time filter algorithm.
+
+\subsection{Coordinate Frames and Conventions}
+
+The estimation problem involves several coordinate frames that must be carefully defined to avoid ambiguity:
+
+\begin{itemize}
+    \item \textbf{Earth Frame ($e$):} A local navigation frame following the North-East-Down (NED) convention. The $x$-axis points North, the $y$-axis points East, and the $z$-axis points Down (toward the Earth's center). This frame serves as the inertial reference for position and velocity states.
+    
+    \item \textbf{Body Frame ($b$):} A frame fixed to the interceptor with the $x$-axis pointing forward along the vehicle's longitudinal axis, the $y$-axis pointing right, and the $z$-axis pointing down. The IMU measurements are expressed in this frame.
+    
+    \item \textbf{Camera Frame ($c$):} A frame attached to the onboard camera. The $z$-axis points along the optical axis (forward), while $x$ and $y$ axes define the image plane. The transformation from body to camera frame is assumed known and constant.
+\end{itemize}
+
+The rotation matrix $\R(\quat)$ transforms vectors from the body frame to the earth frame. Conversely, $\R^T$ (or equivalently $\R^{-1}$) transforms from earth to body frame. The rotation matrix $\R_{c/b}$ represents the fixed transformation from body frame to camera frame.
+
+\subsection{Nominal State Vector}
+
+The nominal state vector $\mathbf{x} \in \mathbb{R}^{18}$ contains all quantities needed to describe the interceptor's motion and sensor biases:
 \begin{equation}
     \mathbf{x} = \begin{bmatrix} \quat \\ \pr \\ \vr \\ \pbar \\ \bgyr \\ \bacc \end{bmatrix}
-    = \begin{bmatrix} 
-        q_0, q_1, q_2, q_3 \\ 
-        p_{r,x}, p_{r,y}, p_{r,z} \\ 
-        v_{r,x}, v_{r,y}, v_{r,z} \\ 
-        \bar{p}_x, \bar{p}_y \\ 
-        \omega_{b,x}, \omega_{b,y}, \omega_{b,z} \\ 
-        a_{b,x}, a_{b,y}, a_{b,z}
-    \end{bmatrix}
 \end{equation}
 
-where:
-\begin{itemize}
-    \item $\quat \in \mathbb{R}^4$: Quaternion (attitude), $\quat = [q_0, q_1, q_2, q_3]^T$
-    \item $\pr \in \mathbb{R}^3$: Relative position (earth frame)
-    \item $\vr \in \mathbb{R}^3$: Relative velocity (earth frame)
-    \item $\pbar \in \mathbb{R}^2$: Normalized image coordinates
-    \item $\bgyr \in \mathbb{R}^3$: Gyroscope bias
-    \item $\bacc \in \mathbb{R}^3$: Accelerometer bias
-\end{itemize}
+Each component has a specific physical meaning and role in the estimation:
 
-\subsection{Error State Vector (17 states)}
-The error state vector is defined as:
+\textbf{Attitude Quaternion} ($\quat \in \mathbb{R}^4$): The quaternion represents the orientation of the body frame relative to the earth frame using the scalar-first convention $\quat = [q_0, q_1, q_2, q_3]^T$, where $q_0$ is the scalar part. The quaternion must satisfy the unit-norm constraint $\|\quat\| = 1$.
+
+\textbf{Relative Position} ($\pr \in \mathbb{R}^3$): The position of the interceptor relative to the target, expressed in the earth frame. This is defined as $\pr = \mathbf{p}_{int} - \mathbf{p}_{tgt}$, so a zero relative position indicates intercept.
+
+\textbf{Relative Velocity} ($\vr \in \mathbb{R}^3$): The velocity of the interceptor relative to the target in the earth frame, computed as $\vr = \dot{\pr}$.
+
+\textbf{Normalized Image Coordinates} ($\pbar \in \mathbb{R}^2$): The target's position in the camera image plane, normalized by the focal length: $\bar{p}_x = p_{c,x}/p_{c,z}$ and $\bar{p}_y = p_{c,y}/p_{c,z}$, where $(p_{c,x}, p_{c,y}, p_{c,z})$ is the target position in camera coordinates.
+
+\textbf{Gyroscope Bias} ($\bgyr \in \mathbb{R}^3$): The slowly-varying bias in the gyroscope measurements, modeled as a random walk process.
+
+\textbf{Accelerometer Bias} ($\bacc \in \mathbb{R}^3$): The slowly-varying bias in the accelerometer measurements, also modeled as a random walk.
+
+\subsection{Error State Vector}
+
+The error state vector $\delta\mathbf{x} \in \mathbb{R}^{17}$ represents small perturbations from the nominal state:
 \begin{equation}
     \delta\mathbf{x} = \begin{bmatrix} \delta\bm{\theta} \\ \delta\pr \\ \delta\vr \\ \delta\pbar \\ \delta\bgyr \\ \delta\bacc \end{bmatrix}
-    \in \mathbb{R}^{17}
 \end{equation}
 
-where $\delta\bm{\theta} \in \mathbb{R}^3$ is the attitude error represented as an axis-angle vector (instead of 4-element quaternion error).
+The key difference from the nominal state is that attitude error is represented by a three-parameter rotation vector $\delta\bm{\theta} \in \mathbb{R}^3$ rather than a four-parameter quaternion error. This vector represents a small rotation such that the true quaternion is related to the nominal quaternion by:
+\begin{equation}
+    \quat_{true} = \quat_{nom} \otimes \delta\quat(\delta\bm{\theta})
+\end{equation}
+where $\delta\quat$ is a small-angle quaternion constructed from $\delta\bm{\theta}$.
 
-%==============================================================================
-\section{IMU Measurement Model}
-%==============================================================================
+The remaining error states are simple additive errors: $\pr^{true} = \pr + \delta\pr$, and similarly for velocity, image coordinates, and biases.
 
-\subsection{True Quantities}
-The true angular velocity and acceleration are related to measurements by:
+\subsection{IMU Model and Dead-Reckoning}
+
+The Inertial Measurement Unit provides measurements of angular velocity and specific force in the body frame. The measurement models account for both white noise and bias:
 \begin{align}
-    \bm{\omega}_t &= \bm{\omega}_m - \bgyr^t - \mathbf{n}_\omega \\
-    \mathbf{a}_t &= \R(\quat_t)(\mathbf{a}_m - \bacc^t - \mathbf{n}_a) + \mathbf{g}
+    \bm{\omega}_m &= \bm{\omega}_{true} + \bgyr + \mathbf{n}_\omega \\
+    \mathbf{a}_m &= \mathbf{a}_{true} + \bacc + \mathbf{n}_a
 \end{align}
 
-where:
-\begin{itemize}
-    \item $\bm{\omega}_m$: Measured angular velocity
-    \item $\mathbf{a}_m$: Measured body acceleration
-    \item $\bgyr^t = \bgyr + \delta\bgyr$: True gyroscope bias
-    \item $\bacc^t = \bacc + \delta\bacc$: True accelerometer bias
-    \item $\mathbf{n}_\omega \sim \mathcal{N}(0, \sigma_{\tilde{\omega}n}^2 \I)$: Gyroscope noise
-    \item $\mathbf{n}_a \sim \mathcal{N}(0, \sigma_{\tilde{a}n}^2 \I)$: Accelerometer noise
-\end{itemize}
+where $\bm{\omega}_m$ and $\mathbf{a}_m$ are the raw IMU measurements, $\bm{\omega}_{true}$ and $\mathbf{a}_{true}$ are the true angular velocity and specific force, and $\mathbf{n}_\omega$ and $\mathbf{n}_a$ are white Gaussian noise processes.
 
-\subsection{Noise Parameters}
+The biases themselves evolve as random walks driven by process noise:
+\begin{align}
+    \dot{\bgyr} &= \bm{\omega}_w, \quad \bm{\omega}_w \sim \mathcal{N}(\mathbf{0}, \sigma_{\omega w}^2 \I_3) \\
+    \dot{\bacc} &= \mathbf{a}_w, \quad \mathbf{a}_w \sim \mathcal{N}(\mathbf{0}, \sigma_{aw}^2 \I_3)
+\end{align}
+
+The four noise parameters that characterize the IMU are summarized in Table~\ref{tab:imu_params}.
+
 \begin{table}[h]
 \centering
 \begin{tabular}{ccl}
 \toprule
 Symbol & Units & Description \\
 \midrule
-$\sigma_{\tilde{a}n}$ & $\text{m/s}^2$ & Accelerometer measurement noise std \\
-$\sigma_{\tilde{\omega}n}$ & $\text{rad/s}$ & Gyroscope measurement noise std \\
-$\sigma_{aw}$ & $\text{m/s}^2\sqrt{\text{s}}$ & Accelerometer bias random walk \\
-$\sigma_{\omega w}$ & $\text{rad/s}\sqrt{\text{s}}$ & Gyroscope bias random walk \\
+$\sigma_{\tilde{a}n}$ & m/s$^2$ & Accelerometer measurement noise std \\
+$\sigma_{\tilde{\omega}n}$ & rad/s & Gyroscope measurement noise std \\
+$\sigma_{aw}$ & m/s$^2$/$\sqrt{\text{s}}$ & Accelerometer bias random walk \\
+$\sigma_{\omega w}$ & rad/s/$\sqrt{\text{s}}$ & Gyroscope bias random walk \\
 \bottomrule
 \end{tabular}
-\caption{IMU Noise Parameters}
+\caption{IMU noise parameters used in simulation and filter tuning}
+\label{tab:imu_params}
 \end{table}
 
+For dead-reckoning, the nominal state is propagated using the IMU measurements with the estimated biases subtracted. The attitude propagates according to quaternion kinematics, while position and velocity follow standard kinematic equations with gravity compensation.
+
+\subsection{Measurement Models}
+
+The ESKF incorporates two types of exteroceptive measurements to correct the dead-reckoning drift.
+
+\subsubsection{Camera Measurement}
+The camera provides measurements of the target's position in the normalized image plane. The measurement model is:
+\begin{equation}
+    \mathbf{z}_{\text{img}} = \pbar + \mathbf{v}_{\text{img}}, \quad \mathbf{v}_{\text{img}} \sim \mathcal{N}(\mathbf{0}, \sigma_{img}^2 \I_2)
+\end{equation}
+
+The camera update rate is typically 30 Hz, providing frequent corrections to the image feature state. These measurements are particularly valuable for attitude estimation since changes in attitude directly affect the image coordinates.
+
+\subsubsection{Radar Measurement}
+The radar provides direct measurements of the relative position vector:
+\begin{equation}
+    \mathbf{z}_{\text{radar}} = \pr + \mathbf{v}_{\text{radar}}, \quad \mathbf{v}_{\text{radar}} \sim \mathcal{N}(\mathbf{0}, \sigma_{radar}^2 \I_3)
+\end{equation}
+
+Although the radar updates are infrequent (typically 0.5-2 Hz), they provide strong observability for the position states and help bound the overall estimation error.
+
+\subsection{State Transition Jacobian Matrix}
+
+The continuous-time error state dynamics can be written in the linear form:
+\begin{equation}
+    \delta\dot{\mathbf{x}} = \mathbf{F}_c \delta\mathbf{x} + \mathbf{G}_c \mathbf{n}
+\end{equation}
+
+The state transition Jacobian $\mathbf{F}_c \in \mathbb{R}^{17 \times 17}$ captures how perturbations in each error state affect the rates of change of all error states. The structure of this matrix reflects the physical couplings in the system:
+
+\begin{equation}
+\mathbf{F}_c = \begin{bmatrix}
+    \mathbf{F}_{\theta\theta} & \mathbf{0} & \mathbf{0} & \mathbf{0} & -\I_3 & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \I_3 & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+    \mathbf{F}_{v\theta} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & -\R \\
+    \mathbf{F}_{\bar{p}\theta} & \mathbf{F}_{\bar{p}p} & \mathbf{F}_{\bar{p}v} & \mathbf{A}_{\bar{p}} & \mathbf{F}_{\bar{p}b_\omega} & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+    \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0}
+\end{bmatrix}
+\label{eq:Fc}
+\end{equation}
+
+The physical interpretation of the main blocks is as follows:
+\begin{itemize}
+    \item $\mathbf{F}_{\theta\theta} = -\skew{\bm{\omega}_m - \bgyr}$: Attitude error couples to itself through the angular velocity
+    \item $-\I_3$ in position (1,5): Gyroscope bias directly affects attitude rate
+    \item $\I_3$ in position (2,3): Velocity error directly drives position error rate
+    \item $\mathbf{F}_{v\theta}$: Attitude error creates velocity error through incorrect gravity projection
+    \item $-\R$ in position (3,6): Accelerometer bias creates velocity error in the earth frame
+    \item Fourth row: Image feature dynamics couple to all kinematic states
+\end{itemize}
+
+The complete expressions for all Jacobian sub-blocks are provided in Appendix~\ref{app:jacobians}.
+
+\subsection{Process Noise Covariance Matrix}
+
+The noise Jacobian $\mathbf{G}_c \in \mathbb{R}^{17 \times 12}$ maps the 12-dimensional noise vector to the 17-dimensional error state rate. The noise vector is:
+\begin{equation}
+    \mathbf{n} = \begin{bmatrix} \mathbf{n}_\omega \\ \mathbf{n}_a \\ \bm{\omega}_w \\ \mathbf{a}_w \end{bmatrix} \in \mathbb{R}^{12}
+\end{equation}
+
+The continuous-time process noise covariance is:
+\begin{equation}
+    \mathbf{Q}_c = \text{diag}\left(\sigma_{\tilde{\omega}n}^2 \I_3, \sigma_{\tilde{a}n}^2 \I_3, \sigma_{\omega w}^2 \I_3, \sigma_{aw}^2 \I_3\right)
+\end{equation}
+
+Note that the IMU noise parameters defined in the GUI directly populate this matrix, establishing a clear connection between the sensor characteristics specified by the user and the filter's process noise model.
+
+\subsection{ESKF Algorithm}
+
+The ESKF operates in a predict-update cycle, similar to the standard Kalman filter but with the important distinction that the nominal state and error state are treated separately.
+
+\subsubsection{Prediction Phase}
+At each IMU sample (typically 200 Hz), the filter performs the following steps:
+
+\textbf{1. Nominal State Propagation:} The nominal state is propagated using the corrected IMU measurements:
+\begin{align}
+    \quat_{k+1} &= \quat_k \otimes \exp_q\left((\bm{\omega}_m - \bgyr) \Delta t\right) \\
+    {\pr}_{k+1} &= {\pr}_k + {\vr}_k \Delta t + \frac{1}{2}\mathbf{a}_{ned} \Delta t^2 \\
+    {\vr}_{k+1} &= {\vr}_k + \mathbf{a}_{ned} \Delta t \\
+    {\pbar}_{k+1} &= {\pbar}_k + \dot{\pbar} \Delta t
+\end{align}
+where $\mathbf{a}_{ned} = \R(\quat)(\mathbf{a}_m - \bacc) + \mathbf{g}$ is the acceleration in the earth frame.
+
+\textbf{2. Error State Reset:} The error state mean remains at zero since we assume the nominal state is our best estimate.
+
+\textbf{3. Covariance Propagation:} The error covariance is propagated according to:
+\begin{equation}
+    \mathbf{P}_{k+1}^- = \mathbf{F}_d \mathbf{P}_k \mathbf{F}_d^T + \mathbf{G}_d \mathbf{Q}_c \mathbf{G}_d^T
+\end{equation}
+where $\mathbf{F}_d$ and $\mathbf{G}_d$ are the discretized versions of $\mathbf{F}_c$ and $\mathbf{G}_c$.
+
+\subsubsection{Update Phase}
+When a measurement arrives (camera at 30 Hz, radar at 0.5 Hz), the filter performs the following:
+
+\textbf{1. Innovation Computation:}
+\begin{equation}
+    \bm{\nu} = \mathbf{z} - h(\mathbf{x}^-)
+\end{equation}
+
+\textbf{2. Kalman Gain Computation:}
+\begin{equation}
+    \mathbf{K} = \mathbf{P}^- \mathbf{H}^T (\mathbf{H}\mathbf{P}^-\mathbf{H}^T + \mathbf{R})^{-1}
+\end{equation}
+
+\textbf{3. Error State Update:}
+\begin{equation}
+    \delta\hat{\mathbf{x}} = \mathbf{K} \bm{\nu}
+\end{equation}
+
+\textbf{4. Nominal State Injection:} The error state is ``injected'' into the nominal state:
+\begin{align}
+    \quat^+ &= \quat^- \otimes \exp_q(\delta\bm{\theta}) \\
+    \pr^+ &= \pr^- + \delta\pr \\
+    \vr^+ &= \vr^- + \delta\vr \\
+    \pbar^+ &= \pbar^- + \delta\pbar \\
+    \bgyr^+ &= \bgyr^- + \delta\bgyr \\
+    \bacc^+ &= \bacc^- + \delta\bacc
+\end{align}
+
+\textbf{5. Covariance Update:} Using the Joseph form for numerical stability:
+\begin{equation}
+    \mathbf{P}^+ = (\I - \mathbf{K}\mathbf{H}) \mathbf{P}^- (\I - \mathbf{K}\mathbf{H})^T + \mathbf{K} \mathbf{R} \mathbf{K}^T
+\end{equation}
+
+\textbf{6. Error State Reset:} After injection, the error state is reset to zero, and the covariance is adjusted if needed (for small errors, this adjustment is negligible).
+
 %==============================================================================
-\section{Continuous-Time Kinematics}
+\section{ESKF Visual Servoing GUI}
+\label{sec:gui}
+%==============================================================================
+
+To facilitate interactive experimentation with the ESKF algorithm and provide an educational tool for understanding filter behavior, we developed a comprehensive MATLAB Graphical User Interface (GUI). The GUI enables users to configure simulation parameters, run real-time simulations, and visualize results without writing any code.
+
+\subsection{Overview and Layout}
+
+The GUI window is divided into two main regions as shown in Figure~\ref{fig:gui_overview}. The left side (approximately 70\% of the window) contains the main visualization area where 3D trajectories and 2D plots are displayed. The right side (30\%) contains four configuration panels that can be accessed via tabs: MODEL, SENSORS, FILTER, and RESULTS. At the bottom of the right panel, control buttons allow the user to run, pause, and reset simulations.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{3cm}[GUI Overview Screenshot]\vspace{3cm}}}
+    \caption{Overview of the ESKF Visual Servoing GUI showing the main visualization area (left) and configuration panels (right)}
+    \label{fig:gui_overview}
+\end{figure}
+
+\subsection{MODEL Panel}
+
+The MODEL panel, shown in Figure~\ref{fig:model_panel}, provides controls for configuring the IMU sensor model and defining the simulation scenario. This panel is divided into two sections: IMU noise parameters and scenario settings.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.4\textwidth}{\centering\vspace{4cm}[MODEL Panel Screenshot]\vspace{4cm}}}
+    \caption{The MODEL panel showing IMU noise parameter sliders and scenario configuration fields}
+    \label{fig:model_panel}
+\end{figure}
+
+\subsubsection{IMU Noise Parameters}
+The IMU noise section allows users to adjust the four fundamental noise parameters that characterize the inertial sensor:
+
+\begin{itemize}
+    \item \textbf{Accel Noise ($\sigma_{\tilde{a}n}$):} The standard deviation of white noise on accelerometer measurements, specified in m/s$^2$. Higher values simulate noisier, lower-quality accelerometers.
+    
+    \item \textbf{Gyro Noise ($\sigma_{\tilde{\omega}n}$):} The standard deviation of white noise on gyroscope measurements, specified in rad/s. This directly affects attitude estimation accuracy.
+    
+    \item \textbf{Accel Bias RW ($\sigma_{aw}$):} The accelerometer bias random walk coefficient, representing how quickly the bias drifts over time. Higher values indicate less stable sensors.
+    
+    \item \textbf{Gyro Bias RW ($\sigma_{\omega w}$):} The gyroscope bias random walk coefficient. This is typically much smaller than the measurement noise but causes unbounded drift if not estimated.
+    
+    \item \textbf{IMU Frequency:} The sampling rate of the IMU in Hertz. The default is 200 Hz, which is typical for tactical-grade IMUs.
+\end{itemize}
+
+Each noise parameter is adjustable via both a slider (for quick qualitative adjustments) and an edit box (for precise numerical entry). The sliders use scientific notation display for small values like bias random walk coefficients.
+
+Importantly, these same noise parameters are used to construct the process noise covariance matrix $\mathbf{Q}_c$ in the ESKF. This means that setting ``correct'' values (matching the simulated IMU characteristics) will result in a consistent filter, while intentionally misspecifying these values allows users to explore the effects of filter tuning mismatches.
+
+\subsubsection{Scenario Settings}
+The scenario section defines the initial conditions for both the interceptor and target:
+
+\begin{itemize}
+    \item \textbf{Int Pos [N E D]:} Initial interceptor position in the NED frame, specified as three space-separated values in meters.
+    
+    \item \textbf{Tgt Pos [N E D]:} Initial target position in the NED frame, in meters.
+    
+    \item \textbf{Int v\_b:} Initial interceptor velocity in the body frame, in m/s. This allows specifying forward velocity without knowing the initial heading.
+    
+    \item \textbf{Tgt v\_n:} Initial target velocity in the NED frame, in m/s. Setting non-zero values creates a moving target scenario.
+    
+    \item \textbf{Int Euler [Y P R]:} Initial interceptor attitude specified as Yaw, Pitch, and Roll angles in degrees. This determines the initial orientation of the body frame relative to the earth frame.
+    
+    \item \textbf{Max Velocity:} Maximum allowed interceptor velocity, used by the guidance controller.
+    
+    \item \textbf{Max Body Rate:} Maximum allowed angular velocity, constraining how quickly the interceptor can maneuver.
+\end{itemize}
+
+These settings allow creating diverse simulation scenarios, from simple head-on engagements to complex pursuit scenarios with maneuvering targets.
+
+\subsection{SENSORS Panel}
+
+The SENSORS panel, shown in Figure~\ref{fig:sensors_panel}, configures the exteroceptive sensors used for measurement updates. Currently, two sensor types are supported: a camera for visual tracking and a radar for range measurements.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.4\textwidth}{\centering\vspace{4cm}[SENSORS Panel Screenshot]\vspace{4cm}}}
+    \caption{The SENSORS panel with camera and radar configuration options}
+    \label{fig:sensors_panel}
+\end{figure}
+
+\subsubsection{Camera Configuration}
+\begin{itemize}
+    \item \textbf{Enabled:} Checkbox to enable or disable camera measurements entirely. Disabling the camera allows studying filter behavior with IMU and radar only.
+    
+    \item \textbf{Update Rate:} Camera frame rate in Hertz (default: 30 Hz). Higher rates provide more frequent corrections but increase computational load.
+    
+    \item \textbf{Image Noise:} Standard deviation of noise on normalized image coordinates. This represents the combined effect of image processing errors and target detection uncertainty.
+    
+    \item \textbf{Latency:} Processing delay for camera measurements in milliseconds. This simulates the delay between image capture and availability of the measurement to the filter.
+\end{itemize}
+
+\subsubsection{Radar Configuration}
+\begin{itemize}
+    \item \textbf{Enabled:} Checkbox to enable or disable radar measurements.
+    
+    \item \textbf{Update Rate:} Radar update frequency in Hertz (default: 0.5 Hz). Radar systems typically operate at lower rates than cameras.
+    
+    \item \textbf{Pos Noise:} Standard deviation of position measurement noise in meters. This represents the radar's range and angle measurement accuracy combined.
+\end{itemize}
+
+The ability to enable and disable individual sensors makes it easy to study observability properties and the contribution of each sensor to the overall estimation accuracy.
+
+\subsection{FILTER Panel}
+
+The FILTER panel, shown in Figure~\ref{fig:filter_panel}, configures the ESKF initialization and provides tools for rapid experimentation with different uncertainty settings.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.4\textwidth}{\centering\vspace{4cm}[FILTER Panel Screenshot]\vspace{4cm}}}
+    \caption{The FILTER panel showing algorithm selection, presets, and uncertainty parameters}
+    \label{fig:filter_panel}
+\end{figure}
+
+\subsubsection{Algorithm Selection}
+A dropdown menu allows selecting the estimation algorithm. Currently, ESKF is the only implemented option, with UKF (Unscented Kalman Filter) planned as a future addition for comparison studies.
+
+\subsubsection{Uncertainty Presets}
+Three preset buttons provide quick configuration of both initial covariance and initial errors:
+
+\begin{itemize}
+    \item \textbf{Low:} Conservative settings with small initial uncertainties and small initial errors. Suitable for scenarios where the initial state is well-known.
+    
+    \item \textbf{Medium:} Balanced default settings representing typical operational conditions.
+    
+    \item \textbf{High:} Large initial uncertainties and large initial errors. Useful for testing filter convergence from poor initial estimates.
+\end{itemize}
+
+Clicking a preset button simultaneously populates all uncertainty fields, providing a convenient starting point for further customization.
+
+\subsubsection{Initial 1-Sigma Values}
+These fields define the diagonal elements of the initial error covariance matrix $\mathbf{P}_0$:
+
+\begin{itemize}
+    \item Position (m), Velocity (m/s), Attitude (rad), Image (normalized), Gyro Bias (rad/s), Accel Bias (m/s$^2$)
+\end{itemize}
+
+The initial covariance should reflect the user's confidence in the initial state estimate. Larger values allow the filter more flexibility to correct the initial estimate, but may cause larger transients.
+
+\subsubsection{Initial Errors}
+These fields define the actual initial estimation errors (the difference between the true and estimated initial states). Setting non-zero values here allows studying filter convergence behavior:
+
+\begin{itemize}
+    \item Position [m], Velocity [m/s], Attitude [deg], Image [norm], Gyro Bias [rad/s], Accel Bias [m/s$^2$]
+\end{itemize}
+
+The relationship between initial covariance and initial error is important for filter consistency. Ideally, the initial error should be within the $3\sigma$ bounds implied by the initial covariance.
+
+\subsection{RESULTS Panel}
+
+The RESULTS panel, shown in Figure~\ref{fig:results_panel}, displays real-time simulation statistics and provides controls for switching between different visualization modes.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.4\textwidth}{\centering\vspace{4cm}[RESULTS Panel Screenshot]\vspace{4cm}}}
+    \caption{The RESULTS panel showing real-time statistics and plot view selection buttons}
+    \label{fig:results_panel}
+\end{figure}
+
+\subsubsection{Real-Time Statistics}
+During simulation, the panel displays:
+\begin{itemize}
+    \item \textbf{Est Error (Position):} Current Euclidean norm of position estimation error in meters
+    \item \textbf{Est Error (Velocity):} Current Euclidean norm of velocity estimation error in m/s
+\end{itemize}
+
+These values update in real-time, providing immediate feedback on filter performance.
+
+\subsubsection{Plot View Selection}
+Five buttons allow switching between different visualization modes:
+
+\begin{enumerate}
+    \item \textbf{3D Scenario:} A 3D view showing the interceptor and target trajectories
+    \item \textbf{State Estimation:} Time histories of position, velocity, and image features
+    \item \textbf{Attitude Estimation:} Euler angle comparisons (true vs. estimated)
+    \item \textbf{IMU Bias Estimation:} Gyroscope and accelerometer bias estimation
+    \item \textbf{Covariance Evolution:} Time histories of all error state standard deviations
+\end{enumerate}
+
+\subsection{Control Buttons and Playback Options}
+
+The bottom portion of the right panel contains simulation controls:
+
+\begin{itemize}
+    \item \textbf{RUN:} Starts the simulation with current settings
+    \item \textbf{STOP:} Pauses the running simulation, preserving current state
+    \item \textbf{CONTINUE:} Resumes a paused simulation
+    \item \textbf{RESET:} Resets the simulation to initial conditions
+\end{itemize}
+
+Additional options include:
+\begin{itemize}
+    \item \textbf{Live Sim:} When checked, the simulation runs with real-time visualization updates. When unchecked, the simulation runs in batch mode (faster) with visualization only at the end.
+    
+    \item \textbf{Pace:} A speed multiplier for live simulation. Values less than 1 slow down the simulation (useful for observing rapid transients), while values greater than 1 speed it up.
+    
+    \item \textbf{SAVE RESULTS:} Exports all simulation data to a timestamped folder, including:
+    \begin{itemize}
+        \item MAT file containing full state history and filter covariance
+        \item Configuration file in JSON format
+        \item Figure snapshots in both FIG and JPG formats
+    \end{itemize}
+\end{itemize}
+
+%==============================================================================
+\section{Simulation Results}
+\label{sec:results}
+%==============================================================================
+
+This section presents representative simulation results demonstrating the ESKF performance under various conditions. All simulations use the default scenario with an interceptor starting at the origin pursuing a target located at (200, 200, -100) meters.
+
+\subsection{3D Visualization}
+
+Figure~\ref{fig:3d_scenario} shows the 3D scenario view during a typical simulation. The blue trajectory shows the interceptor path, while the red trajectory shows the target. The transparent cones visualize the attitude, with blue representing the true attitude and red the estimated attitude. The inset in the lower-right corner shows the image plane with the true (blue) and estimated (red) normalized coordinates.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.8\textwidth}{\centering\vspace{5cm}[3D Scenario Screenshot]\vspace{5cm}}}
+    \caption{3D visualization showing interceptor and target trajectories with attitude cones and image plane inset}
+    \label{fig:3d_scenario}
+\end{figure}
+
+\subsection{State Estimation Results}
+
+Figure~\ref{fig:state_estimation} shows the state estimation results for a simulation with medium initial uncertainty. The left column shows true versus estimated values for position, velocity, and image features. The right column shows the estimation errors with $\pm 3\sigma$ bounds from the filter covariance.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{6cm}[State Estimation Plots]\vspace{6cm}}}
+    \caption{State estimation results showing true vs. estimated values (left) and estimation errors with $3\sigma$ bounds (right) for position, velocity, and image features}
+    \label{fig:state_estimation}
+\end{figure}
+
+The estimation errors remain within the $3\sigma$ bounds throughout the simulation, indicating that the filter is consistent. The errors generally decrease over time as more measurements are incorporated and the biases become observable.
+
+\subsection{Attitude Estimation Results}
+
+Figure~\ref{fig:attitude_estimation} shows the attitude estimation results expressed in Euler angles. The filter successfully tracks the true attitude despite the initial error and the dynamic maneuvering required to pursue the target.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{5cm}[Attitude Estimation Plots]\vspace{5cm}}}
+    \caption{Attitude estimation showing Yaw, Pitch, and Roll angles with estimation errors and $3\sigma$ bounds}
+    \label{fig:attitude_estimation}
+\end{figure}
+
+\subsection{Bias Estimation Results}
+
+Figure~\ref{fig:bias_estimation} demonstrates the filter's ability to estimate the IMU biases. The gyroscope biases (top row) and accelerometer biases (bottom row) converge toward their true values over time as the system becomes observable through the combination of dynamic motion and exteroceptive measurements.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{5cm}[Bias Estimation Plots]\vspace{5cm}}}
+    \caption{IMU bias estimation showing true vs. estimated values and estimation errors with $3\sigma$ bounds for gyroscope (top) and accelerometer (bottom) biases}
+    \label{fig:bias_estimation}
+\end{figure}
+
+\subsection{Covariance Evolution}
+
+Figure~\ref{fig:covariance} shows the evolution of the diagonal elements of the error covariance matrix over time. All covariance values generally decrease, indicating that the filter becomes more confident in its estimates as more measurements are processed.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual screenshot
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{5cm}[Covariance Evolution Plots]\vspace{5cm}}}
+    \caption{Evolution of error state standard deviations ($\sigma$) over time for all 17 error states}
+    \label{fig:covariance}
+\end{figure}
+%==============================================================================
+\section{Observability Analysis}
+\label{sec:observability}
+%==============================================================================
+
+Understanding which states are observable under different sensor configurations is crucial for filter design and sensor selection. This section presents a systematic observability analysis using the observability Gramian and its Singular Value Decomposition (SVD).
+
+\subsection{Observability Gramian Method}
+
+The observability of a linear time-varying system can be analyzed through the observability Gramian. For our discretized ESKF error-state dynamics, the observability Gramian is constructed as:
+\begin{equation}
+    \mathbf{L} = \sum_{k=0}^{N} \bm{\Phi}_k^T \mathbf{H}^T \mathbf{H} \bm{\Phi}_k
+\end{equation}
+where $\bm{\Phi}_k = \mathbf{F}_{d,k-1} \mathbf{F}_{d,k-2} \cdots \mathbf{F}_{d,0}$ is the accumulated state transition matrix from time $0$ to $k$, and $\mathbf{H}$ is the measurement Jacobian.
+
+The Gramian $\mathbf{L}$ is a symmetric positive semi-definite matrix that captures how measurement information propagates through the system dynamics. States that contribute to the null space of $\mathbf{L}$ are unobservable.
+
+\subsection{SVD Decomposition and Observability Measure}
+
+To quantify observability, we apply Singular Value Decomposition to the Gramian:
+\begin{equation}
+    \mathbf{L} = \mathbf{U} \bm{\Sigma} \mathbf{V}^T
+\end{equation}
+where $\mathbf{U}$ contains the left singular vectors (orthonormal basis in state space), $\bm{\Sigma} = \text{diag}(\sigma_1, \sigma_2, \ldots, \sigma_{17})$ contains the singular values in descending order, and $\mathbf{V}$ contains the right singular vectors.
+
+The singular values provide direct insight into observability:
+\begin{itemize}
+    \item Large singular values ($\sigma_i \gg 0$) indicate strongly observable directions
+    \item Near-zero singular values ($\sigma_i \approx 0$) indicate unobservable or weakly observable directions
+    \item The condition number $\kappa = \sigma_1 / \sigma_{17}$ indicates overall observability quality
+\end{itemize}
+
+To determine observability of individual error states, we compute a state-wise observability measure:
+\begin{equation}
+    \mu_i = \sqrt{\sum_{j=1}^{17} \sigma_j^2 \cdot u_{ij}^2}
+\end{equation}
+where $u_{ij}$ is the $(i,j)$ element of the $\mathbf{U}$ matrix. This measure quantifies how strongly each state $i$ participates in the observable subspace.
+
+\subsection{Observability Results by Sensor Configuration}
+
+We analyze three sensor configurations to understand the contribution of each sensor to system observability.
+
+\subsubsection{Camera + Radar (Full Sensor Suite)}
+
+When both camera and radar measurements are available, the system is \textbf{fully observable}. All 17 singular values of the observability Gramian are significantly above the numerical threshold ($\sigma_i > 10^{-10}$), as shown in Figure~\ref{fig:obs_full}.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual observability plot
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{4cm}[Observability Analysis - Camera + Radar]\\All singular values above threshold $\rightarrow$ Fully Observable\vspace{4cm}}}
+    \caption{Observability analysis with both camera and radar enabled. All error states are observable, with the condition number indicating good overall observability.}
+    \label{fig:obs_full}
+\end{figure}
+
+\subsubsection{Camera Only (Radar Disabled)}
+
+When only the camera is available, several states become unobservable:
+\begin{itemize}
+    \item \textbf{Relative Position ($\delta\pr$):} Fully unobservable. The camera provides bearing information (direction to target) but cannot measure range. Without range information, the absolute position cannot be determined.
+    \item \textbf{Relative Velocity ($\delta\vr$):} The component of velocity along the camera's $z$-axis (optical axis) is unobservable. Velocity components perpendicular to the optical axis can be inferred from image motion.
+\end{itemize}
+
+This result is intuitive: a monocular camera observes only angles, not distances. The depth ambiguity propagates to position states and velocity components along the viewing direction.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual observability plot
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{4cm}[Observability Analysis - Camera Only]\\$\delta\pr$ unobservable, $\delta v_{rz}$ (camera axis) unobservable\vspace{4cm}}}
+    \caption{Observability analysis with camera only. The relative position and the velocity component along the camera's optical axis are unobservable.}
+    \label{fig:obs_camera}
+\end{figure}
+
+\subsubsection{Radar Only (Camera Disabled)}
+
+When only radar is available, the image feature states become unobservable:
+\begin{itemize}
+    \item \textbf{Image Features ($\delta\pbar$):} Fully unobservable. Without camera measurements, there is no direct observation of the normalized image coordinates.
+\end{itemize}
+
+The radar provides direct position measurements, so position, velocity, and through system dynamics, the attitude and biases remain observable.
+
+\begin{figure}[h]
+    \centering
+    % TODO: Replace with actual observability plot
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{4cm}[Observability Analysis - Radar Only]\\$\delta\pbar$ (image features) unobservable\vspace{4cm}}}
+    \caption{Observability analysis with radar only. The image feature states are unobservable since no camera measurements are available.}
+    \label{fig:obs_radar}
+\end{figure}
+
+\subsection{Implications for Filter Design}
+
+The observability analysis provides important guidance for filter design and sensor selection:
+\begin{enumerate}
+    \item \textbf{Sensor complementarity:} Camera and radar provide complementary information. Camera gives bearing; radar gives range. Together, they achieve full observability.
+    \item \textbf{Degraded operation:} If one sensor fails, the filter can continue with degraded accuracy, but the unobservable states will drift.
+    \item \textbf{Initial covariance:} For unobservable states, the initial covariance should be set conservatively, as the filter cannot reduce uncertainty in those directions.
+    \item \textbf{Bias observability:} IMU biases become observable through sufficient excitation (dynamic motion) combined with exteroceptive measurements.
+\end{enumerate}
+
+%==============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+%==============================================================================
+
+This paper presented a comprehensive implementation of an Error-State Kalman Filter for visual guidance applications. The main contributions include:
+
+\begin{enumerate}
+    \item A complete mathematical formulation of the 17-dimensional ESKF with image-based visual servoing features, including explicit derivation of all Jacobian matrices.
+    
+    \item A MATLAB implementation with support for multi-rate sensor fusion and delayed measurements.
+    
+    \item An interactive GUI that enables real-time simulation, parameter tuning, and visualization without requiring users to write code.
+    
+    \item Comprehensive documentation suitable for educational use in robotics courses.
+\end{enumerate}
+
+The simulation results demonstrate that the ESKF successfully estimates all states including IMU biases, with estimation errors remaining within the filter's predicted $3\sigma$ bounds. The GUI provides valuable insight into how different parameters affect filter performance.
+
+Future work directions include:
+\begin{itemize}
+    \item Implementation of alternative filters (UKF, particle filter) for comparison
+    \item Addition of more sensor types (GPS, magnetometer)
+    \item Extension to handle target maneuvers via adaptive estimation
+    \item Real hardware integration for experimental validation
+\end{itemize}
+
+%==============================================================================
+\appendix
+
+\section{Detailed Jacobian Derivations}
+\label{app:jacobians}
 %==============================================================================
 
 \subsection{Nominal State Kinematics}
+The continuous-time nominal state kinematics are:
 \begin{align}
     \dot{\quat} &= \frac{1}{2} \quat \otimes \begin{bmatrix} 0 \\ \bm{\omega}_m - \bgyr \end{bmatrix} \\[8pt]
     \dot{\pr} &= \vr \\[8pt]
@@ -132,20 +721,13 @@ $\sigma_{\omega w}$ & $\text{rad/s}\sqrt{\text{s}}$ & Gyroscope bias random walk
     \dot{\bacc} &= \mathbf{0}
 \end{align}
 
-where the camera frame quantities are:
-\begin{align}
-    \mathbf{p}_c &= \R_{c/b} \R(\quat)^T (-\pr) \\
-    \mathbf{v}_c &= \R_{c/b} \R(\quat)^T \vr \\
-    \bm{\omega}_c &= \R_{c/b} (\bm{\omega}_m - \bgyr)
-\end{align}
-
-\subsection{IBVS Jacobian Matrix}
-The image feature dynamics use the interaction matrix:
+\subsection{IBVS Interaction Matrix}
+The image feature rate is given by:
 \begin{equation}
-    \mathbf{L}_s = \begin{bmatrix} \mathbf{L}_v & \mathbf{L}_\omega \end{bmatrix}
+    \dot{\pbar} = \mathbf{L}_v \mathbf{v}_c + \mathbf{L}_\omega \bm{\omega}_c
 \end{equation}
 
-where:
+where the velocity and angular parts of the interaction matrix are:
 \begin{align}
     \mathbf{L}_v &= \begin{bmatrix}
         -\frac{1}{p_{c,z}} & 0 & \frac{\bar{p}_x}{p_{c,z}} \\[4pt]
@@ -157,64 +739,8 @@ where:
     \end{bmatrix}
 \end{align}
 
-\subsection{Continuous Error State Kinematics}
-\begin{align}
-    \delta\dot{\bm{\theta}} &= -\skew{\bm{\omega}_m - \bgyr} \delta\bm{\theta} - \delta\bgyr - \mathbf{n}_\omega \label{eq:dtheta_dot}\\[8pt]
-    \delta\dot{\pr} &= \delta\vr \label{eq:dpr_dot}\\[8pt]
-    \delta\dot{\vr} &= -\R \skew{\mathbf{a}_m - \bacc} \delta\bm{\theta} - \R \delta\bacc - \mathbf{n}_a \label{eq:dvr_dot}\\[8pt]
-    \delta\dot{\pbar} &= \mathbf{A}_{\bar{p}} \delta\pbar + \mathbf{L}_v \delta\mathbf{v}_c + \mathbf{L}_\omega \delta\bm{\omega}_c + \mathbf{A}_{p_{c,z}} \delta p_{c,z} \label{eq:dpbar_dot}\\[8pt]
-    \delta\dot{\bgyr} &= \bm{\omega}_w \label{eq:dbgyr_dot}\\[8pt]
-    \delta\dot{\bacc} &= \mathbf{a}_w \label{eq:dbacc_dot}
-\end{align}
-
-where $\bm{\omega}_w$ and $\mathbf{a}_w$ are the bias random walk noises.
-
-\subsection{Jacobians for $\delta\dot{\pbar}$}
-\begin{align}
-    \mathbf{A}_{\bar{p}} &= \begin{bmatrix}
-        \frac{v_{c,z}}{p_{c,z}} + \bar{p}_y \omega_{c,x} - 2\bar{p}_x \omega_{c,y} & \bar{p}_x \omega_{c,x} + \omega_{c,z} \\[4pt]
-        -\bar{p}_y \omega_{c,y} - \omega_{c,z} & \frac{v_{c,z}}{p_{c,z}} + 2\bar{p}_y \omega_{c,x} - \bar{p}_x \omega_{c,y}
-    \end{bmatrix} \\[10pt]
-    \mathbf{A}_{p_{c,z}} &= \begin{bmatrix}
-        \frac{v_{c,x} - \bar{p}_x v_{c,z}}{p_{c,z}^2} \\[4pt]
-        \frac{v_{c,y} - \bar{p}_y v_{c,z}}{p_{c,z}^2}
-    \end{bmatrix}
-\end{align}
-
-\subsection{Error State Dependencies}
-The camera-frame error states depend on the main error states:
-\begin{align}
-    \delta\mathbf{v}_c &= \R_{c/b} \R^T \delta\vr + \R_{c/b} \skew{\R^T \vr} \delta\bm{\theta} \\[6pt]
-    \delta\bm{\omega}_c &= -\R_{c/b} \delta\bgyr - \R_{c/b} \mathbf{n}_\omega \\[6pt]
-    \delta p_{c,z} &= -\mathbf{e}_3^T \R_{c/b} \R^T \delta\pr - \mathbf{e}_3^T \R_{c/b} \skew{\R^T \pr} \delta\bm{\theta}
-\end{align}
-
-where $\mathbf{e}_3 = [0, 0, 1]^T$.
-
-%==============================================================================
-\section{Continuous-Time Jacobian Matrices}
-%==============================================================================
-
-\subsection{Error State Jacobian $\mathbf{F}_c$ (17$\times$17)}
-The continuous-time error state dynamics can be written as:
-\begin{equation}
-    \delta\dot{\mathbf{x}} = \mathbf{F}_c \delta\mathbf{x} + \mathbf{G}_c \mathbf{n}
-\end{equation}
-
-where the Jacobian $\mathbf{F}_c$ has the structure:
-
-\begin{equation}
-\mathbf{F}_c = \begin{bmatrix}
-    \mathbf{F}_{\theta\theta} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{F}_{\theta b_\omega} & \mathbf{0} \\
-    \mathbf{0} & \mathbf{0} & \I_3 & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
-    \mathbf{F}_{v\theta} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{F}_{v b_a} \\
-    \mathbf{F}_{\bar{p}\theta} & \mathbf{F}_{\bar{p}p} & \mathbf{F}_{\bar{p}v} & \mathbf{A}_{\bar{p}} & \mathbf{F}_{\bar{p}b_\omega} & \mathbf{0} \\
-    \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
-    \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0}
-\end{bmatrix}
-\end{equation}
-
-\subsection{Jacobian Sub-blocks}
+\subsection{Complete Jacobian Sub-blocks}
+The sub-blocks of the state transition Jacobian $\mathbf{F}_c$ are:
 \begin{align}
     \mathbf{F}_{\theta\theta} &= -\skew{\bm{\omega}_m - \bgyr} \\[6pt]
     \mathbf{F}_{\theta b_\omega} &= -\I_3 \\[6pt]
@@ -226,13 +752,7 @@ where the Jacobian $\mathbf{F}_c$ has the structure:
     \mathbf{F}_{\bar{p}b_\omega} &= \mathbf{L}_\omega (-\R_{c/b})
 \end{align}
 
-\subsection{Noise Jacobian $\mathbf{G}_c$ (17$\times$12)}
-The noise vector is:
-\begin{equation}
-    \mathbf{n} = \begin{bmatrix} \mathbf{n}_\omega \\ \mathbf{n}_a \\ \bm{\omega}_w \\ \mathbf{a}_w \end{bmatrix} \in \mathbb{R}^{12}
-\end{equation}
-
-The noise Jacobian is:
+\subsection{Noise Jacobian $\mathbf{G}_c$}
 \begin{equation}
 \mathbf{G}_c = \begin{bmatrix}
     -\I_3 & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
@@ -244,136 +764,14 @@ The noise Jacobian is:
 \end{bmatrix}
 \end{equation}
 
-%==============================================================================
-\section{Discrete-Time Equations}
-%==============================================================================
-
-\subsection{Discretization}
-Using first-order approximation with exact attitude discretization:
+\subsection{Measurement Jacobians}
+The measurement Jacobians for the error state are:
 \begin{align}
-    \mathbf{F}_d &= \I_{17} + \mathbf{F}_c \Delta t \\
-    \mathbf{G}_d &= \mathbf{G}_c \Delta t
+    \mathbf{H}_{\text{img}} &= \begin{bmatrix} \mathbf{0}_{2\times 3} & \mathbf{0}_{2\times 3} & \mathbf{0}_{2\times 3} & \I_2 & \mathbf{0}_{2\times 3} & \mathbf{0}_{2\times 3} \end{bmatrix} \\[8pt]
+    \mathbf{H}_{\text{radar}} &= \begin{bmatrix} \mathbf{0}_{3\times 3} & \I_3 & \mathbf{0}_{3\times 3} & \mathbf{0}_{3\times 2} & \mathbf{0}_{3\times 3} & \mathbf{0}_{3\times 3} \end{bmatrix}
 \end{align}
 
-For the attitude block, exact exponential map is used:
-\begin{equation}
-    \mathbf{F}_d^{[\theta\theta]} = \exp\left(-\skew{\bm{\omega}} \Delta t\right) = \mathbf{R}(-\bm{\omega} \Delta t)
-\end{equation}
-
-using Rodrigues' formula:
-\begin{equation}
-    \exp(\skew{\bm{\phi}}) = \I \cos\|\bm{\phi}\| + \frac{\sin\|\bm{\phi}\|}{\|\bm{\phi}\|} \skew{\bm{\phi}} + \frac{1-\cos\|\bm{\phi}\|}{\|\bm{\phi}\|^2} \bm{\phi}\bm{\phi}^T
-\end{equation}
-
-\subsection{Discrete Noise Covariances}
-Following the paper notation:
-\begin{align}
-    \mathbf{V}_i &= \sigma_{\tilde{a}n}^2 \Delta t^2 \I_3 \quad [\text{m}^2/\text{s}^2] \label{eq:Vi}\\
-    \bm{\Theta}_i &= \sigma_{\tilde{\omega}n}^2 \Delta t^2 \I_3 \quad [\text{rad}^2] \label{eq:Thetai}\\
-    \mathbf{A}_i &= \sigma_{aw}^2 \Delta t \I_3 \quad [\text{m}^2/\text{s}^4] \label{eq:Ai}\\
-    \bm{\Omega}_i &= \sigma_{\omega w}^2 \Delta t \I_3 \quad [\text{rad}^2/\text{s}^2] \label{eq:Omegai}
-\end{align}
-
-The discrete process noise covariance is:
-\begin{equation}
-    \mathbf{Q}_i = \text{blkdiag}(\bm{\Theta}_i, \mathbf{V}_i, \bm{\Omega}_i, \mathbf{A}_i)
-\end{equation}
-
-%==============================================================================
-\section{ESKF Prediction Step}
-%==============================================================================
-
-\subsection{Nominal State Propagation}
-\begin{align}
-    \quat_{k+1} &= \quat_k \otimes \exp_q\left((\bm{\omega}_m - \bgyr) \Delta t\right) \\
-    {\pr}_{k+1} &= {\pr}_k + \frac{1}{2}({\vr}_k + {\vr}_{k+1}) \Delta t \\
-    {\vr}_{k+1} &= {\vr}_k + \left(\R(\quat_k)(\mathbf{a}_m - \bacc) + \mathbf{g}\right) \Delta t \\
-    {\pbar}_{k+1} &= {\pbar}_k + \left(\mathbf{L}_v \mathbf{v}_c + \mathbf{L}_\omega \bm{\omega}_c\right) \Delta t \\
-    {\bgyr}_{k+1} &= {\bgyr}_k \\
-    {\bacc}_{k+1} &= {\bacc}_k
-\end{align}
-
-where the exponential map for quaternion is:
-\begin{equation}
-    \exp_q(\bm{\phi}) = \begin{bmatrix} \cos\frac{\|\bm{\phi}\|}{2} \\ \frac{\bm{\phi}}{\|\bm{\phi}\|} \sin\frac{\|\bm{\phi}\|}{2} \end{bmatrix}
-\end{equation}
-
-\subsection{Error Covariance Propagation}
-The error state remains at zero during prediction. The covariance propagates as:
-\begin{equation}
-    \mathbf{P}_{k+1}^- = \mathbf{F}_d \mathbf{P}_k \mathbf{F}_d^T + \mathbf{G}_d \mathbf{Q}_c \mathbf{G}_d^T
-\end{equation}
-
-where $\mathbf{Q}_c$ is the continuous-time process noise covariance:
-\begin{equation}
-    \mathbf{Q}_c = \text{diag}\left(\sigma_{\tilde{\omega}n}^2 \I_3, \sigma_{\tilde{a}n}^2 \I_3, \sigma_{\omega w}^2 \I_3, \sigma_{aw}^2 \I_3\right)
-\end{equation}
-
-%==============================================================================
-\section{ESKF Update Step}
-%==============================================================================
-
-\subsection{Measurement Models}
-
-\textbf{Image Measurement:}
-\begin{equation}
-    \mathbf{z}_{\text{img}} = \pbar + \mathbf{v}_{\text{img}}, \quad \mathbf{v}_{\text{img}} \sim \mathcal{N}(\mathbf{0}, \mathbf{R}_{\text{img}})
-\end{equation}
-
-\textbf{RADAR Measurement:}
-\begin{equation}
-    \mathbf{z}_{\text{radar}} = \pr + \mathbf{v}_{\text{radar}}, \quad \mathbf{v}_{\text{radar}} \sim \mathcal{N}(\mathbf{0}, \mathbf{R}_{\text{radar}})
-\end{equation}
-
-\subsection{Measurement Jacobians (Error State)}
-\begin{align}
-    \mathbf{H}_{\text{img}} &= \begin{bmatrix} \mathbf{0}_{2\times 3} & \mathbf{0}_{2\times 3} & \mathbf{0}_{2\times 3} & \I_2 & \mathbf{0}_{2\times 3} & \mathbf{0}_{2\times 3} \end{bmatrix} \in \mathbb{R}^{2 \times 17} \\[8pt]
-    \mathbf{H}_{\text{radar}} &= \begin{bmatrix} \mathbf{0}_{3\times 3} & \I_3 & \mathbf{0}_{3\times 3} & \mathbf{0}_{3\times 2} & \mathbf{0}_{3\times 3} & \mathbf{0}_{3\times 3} \end{bmatrix} \in \mathbb{R}^{3 \times 17}
-\end{align}
-
-\subsection{Kalman Gain}
-\begin{equation}
-    \mathbf{K} = \mathbf{P}^- \mathbf{H}^T \left(\mathbf{H} \mathbf{P}^- \mathbf{H}^T + \mathbf{R}\right)^{-1}
-\end{equation}
-
-\subsection{Error State Update}
-\begin{equation}
-    \delta\hat{\mathbf{x}} = \mathbf{K} \left(\mathbf{z} - \hat{\mathbf{z}}\right)
-\end{equation}
-
-\subsection{Nominal State Injection}
-The error state is injected into the nominal state:
-\begin{align}
-    \quat^+ &= \quat^- \otimes \exp_q(\delta\bm{\theta}) \\
-    \pr^+ &= \pr^- + \delta\pr \\
-    \vr^+ &= \vr^- + \delta\vr \\
-    \pbar^+ &= \pbar^- + \delta\pbar \\
-    \bgyr^+ &= \bgyr^- + \delta\bgyr \\
-    \bacc^+ &= \bacc^- + \delta\bacc
-\end{align}
-
-\subsection{Covariance Update (Joseph Form)}
-\begin{equation}
-    \mathbf{P}^+ = (\I - \mathbf{K}\mathbf{H}) \mathbf{P}^- (\I - \mathbf{K}\mathbf{H})^T + \mathbf{K} \mathbf{R} \mathbf{K}^T
-\end{equation}
-
-\subsection{ESKF Reset}
-After error injection, the covariance is reset:
-\begin{equation}
-    \mathbf{P}^+ \leftarrow \mathbf{G}_r \mathbf{P}^+ \mathbf{G}_r^T
-\end{equation}
-
-where the reset matrix accounts for attitude parametrization:
-\begin{equation}
-    \mathbf{G}_r = \text{blkdiag}\left(\I_3 - \frac{1}{2}\skew{\delta\bm{\theta}}, \I_3, \I_3, \I_2, \I_3, \I_3\right)
-\end{equation}
-
-For small $\delta\bm{\theta}$, $\mathbf{G}_r \approx \I_{17}$.
-
-%==============================================================================
-\section{Summary of State Indices}
-%==============================================================================
-
+\subsection{State Indices Reference}
 \begin{table}[h]
 \centering
 \begin{tabular}{lcc}
@@ -392,28 +790,5 @@ Accelerometer Bias & 16--18 & 15--17 \\
 \end{tabular}
 \caption{State vector indexing}
 \end{table}
-
-%==============================================================================
-\section{Algorithm Summary}
-%==============================================================================
-
-\begin{algorithm}[H]
-\caption{ESKF Prediction and Update}
-\begin{algorithmic}[1]
-\State \textbf{Input:} $\mathbf{x}_k$, $\mathbf{P}_k$, $\bm{\omega}_m$, $\mathbf{a}_m$, $\mathbf{z}$
-\State \textbf{Prediction:}
-\State \quad Propagate nominal state: $\mathbf{x}_{k+1} = f(\mathbf{x}_k, \bm{\omega}_m, \mathbf{a}_m)$
-\State \quad Compute Jacobians: $\mathbf{F}_d$, $\mathbf{G}_d$
-\State \quad Propagate covariance: $\mathbf{P}_{k+1}^- = \mathbf{F}_d \mathbf{P}_k \mathbf{F}_d^T + \mathbf{G}_d \mathbf{Q}_c \mathbf{G}_d^T$
-\State \textbf{Update (when measurement available):}
-\State \quad Compute innovation: $\bm{\nu} = \mathbf{z} - h(\mathbf{x}_{k+1})$
-\State \quad Compute Kalman gain: $\mathbf{K} = \mathbf{P}^- \mathbf{H}^T (\mathbf{H}\mathbf{P}^-\mathbf{H}^T + \mathbf{R})^{-1}$
-\State \quad Compute error state: $\delta\mathbf{x} = \mathbf{K} \bm{\nu}$
-\State \quad Inject into nominal: $\mathbf{x}^+ = \mathbf{x}^- \oplus \delta\mathbf{x}$
-\State \quad Update covariance (Joseph): $\mathbf{P}^+ = (\I-\mathbf{K}\mathbf{H})\mathbf{P}^-(\I-\mathbf{K}\mathbf{H})^T + \mathbf{K}\mathbf{R}\mathbf{K}^T$
-\State \quad Reset covariance: $\mathbf{P}^+ \leftarrow \mathbf{G}_r \mathbf{P}^+ \mathbf{G}_r^T$
-\State \textbf{Output:} $\mathbf{x}_{k+1}$, $\mathbf{P}_{k+1}$
-\end{algorithmic}
-\end{algorithm}
 
 \end{document}

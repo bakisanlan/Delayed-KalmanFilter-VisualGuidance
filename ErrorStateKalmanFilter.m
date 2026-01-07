@@ -156,7 +156,26 @@ classdef ErrorStateKalmanFilter < handle
             % Kalman gain (error state space)
             H = obj.H_img_err;
             R = obj.R_img;
+
+            % Innovation covariance (used for both gating and Kalman gain)
             S = H * P_prior * H' + R;
+            
+            % === Mahalanobis Distance Chi-Square Gating ===
+            % Squared Mahalanobis distance: d² = y' * S^(-1) * y
+            % For 2D measurement, d² follows chi-square distribution with 2 DoF
+            d_mahal_sq = innovation' * (S \ innovation);
+            
+            % Chi-square threshold for 99.99% confidence with 2 DoF
+            % chi2inv(0.9999, 2) ≈ 18.42
+            chi2_threshold = 18.42;
+            
+            if d_mahal_sq > chi2_threshold
+                fprintf('False detection rejected (Mahalanobis d²=%.2f > %.2f)\n', ...
+                        d_mahal_sq, chi2_threshold);
+                return
+            end
+            
+            % Kalman gain
             K = P_prior * H' / S;
             
             % Compute error state correction
