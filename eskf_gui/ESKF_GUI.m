@@ -211,9 +211,12 @@ function ESKF_GUI()
     end
     
     function onStop(~,~)
-        stop(simTimer);
-        appState.isRunning = false;
-        appState.isPaused = false;
+        % Pause the simulation (don't fully stop it)
+        if appState.isRunning && ~appState.isPaused
+            stop(simTimer);
+            appState.isPaused = true;
+            % isRunning stays true so CONTINUE can resume
+        end
     end
     
     function onContinue(~,~)
@@ -272,6 +275,17 @@ function ESKF_GUI()
         plotHandles.cone_X = X;
         plotHandles.cone_Y = Y;
         plotHandles.cone_Z = Z;
+        
+        % Add 2D inset axes for image plane (pxbar, pybar) in lower-right corner
+        axImg = axes('Parent', hPlotPanel, 'Units', 'normalized', 'Position', [0.70 0.08 0.25 0.25]);
+        grid(axImg, 'on'); hold(axImg, 'on'); axis(axImg, 'equal');
+        xlabel(axImg, 'p_x'); ylabel(axImg, 'p_y');
+        title(axImg, 'Image Plane', 'FontSize', 9);
+        xlim(axImg, [-1 1]); ylim(axImg, [-1 1]);
+        % Draw origin crosshairs
+        plot(axImg, [-1 1], [0 0], 'k--', 'LineWidth', 0.5);
+        plot(axImg, [0 0], [-1 1], 'k--', 'LineWidth', 0.5);
+        plotHandles.axImg = axImg;
     end
 
     function setupStateView()
@@ -356,20 +370,26 @@ function ESKF_GUI()
         ax = plotHandles.axes;
         cla(ax);
         
+        % Guard: Check if simulation has been initialized
+        if ~isstruct(sim.history) || ~isfield(sim.history, 'count')
+            title(ax, '3D Scenario - Run simulation to see data');
+            return;
+        end
+        
         % Check if history has data for trajectories
         if sim.history.count > 1
             % Plot Interceptor True Trajectory
             pInt = sim.history.p_int(:, 1:sim.history.count);
-            hIntPath = plot3(ax, pInt(1,:), pInt(2,:), pInt(3,:), 'b-', 'LineWidth', 3);
+            hIntPath = plot3(ax, pInt(1,:), pInt(2,:), pInt(3,:), 'k-', 'LineWidth', 3);
             
             % Plot Target True Trajectory
             pTgt = sim.history.p_tgt(:, 1:sim.history.count);
-            hTgtPath = plot3(ax, pTgt(1,:), pTgt(2,:), pTgt(3,:), 'r-', 'LineWidth', 1.5);
+            hTgtPath = plot3(ax, pTgt(1,:), pTgt(2,:), pTgt(3,:), 'b-', 'LineWidth', 1.5);
             
             % Estimated Target Trajectory (p_int - p_r_est)
             pRest = sim.history.x_est(5:7, 1:sim.history.count);
             pTgtEst = pInt - pRest;
-            hTgtEstPath = plot3(ax, pTgtEst(1,:), pTgtEst(2,:), pTgtEst(3,:), 'm--', 'LineWidth', 1.2);
+            hTgtEstPath = plot3(ax, pTgtEst(1,:), pTgtEst(2,:), pTgtEst(3,:), 'r-', 'LineWidth', 1.5);
         else
             hIntPath = []; hTgtPath = []; hTgtEstPath = [];
         end
@@ -444,6 +464,35 @@ function ESKF_GUI()
         xlim(ax, [min_xyz(1) - margin, max_xyz(1) + margin]);
         ylim(ax, [min_xyz(2) - margin, max_xyz(2) + margin]);
         zlim(ax, [min_xyz(3) - margin, max_xyz(3) + margin]);
+        
+        % Update 2D Image Plane Inset
+        if isfield(plotHandles, 'axImg') && isvalid(plotHandles.axImg)
+            axImg = plotHandles.axImg;
+            % Clear previous data but keep crosshairs (redraw them)
+            cla(axImg);
+            hold(axImg, 'on');
+            plot(axImg, [-1 1], [0 0], 'k--', 'LineWidth', 0.5);
+            plot(axImg, [0 0], [-1 1], 'k--', 'LineWidth', 0.5);
+            
+            % Plot trajectory history
+            if sim.history.count > 1
+                pbar_true = sim.history.x_true(11:12, 1:sim.history.count);
+                pbar_est = sim.history.x_est(11:12, 1:sim.history.count);
+                plot(axImg, pbar_true(1,:), pbar_true(2,:), 'b-', 'LineWidth', 1.5);
+                plot(axImg, pbar_est(1,:), pbar_est(2,:), 'r--', 'LineWidth', 1.2);
+            end
+            
+            % Plot current position with markers
+            if ~isempty(sim.x_true) && ~isempty(sim.x_est)
+                plot(axImg, sim.x_true(11), sim.x_true(12), 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b');
+                plot(axImg, sim.x_est(11), sim.x_est(12), 'rs', 'MarkerSize', 8, 'MarkerFaceColor', 'r');
+            end
+            
+            legend(axImg, 'True', 'Est', 'Location', 'northeast', 'FontSize', 7);
+            title(axImg, 'Image Plane ($\bar{p}$)', 'Interpreter', 'latex', 'FontSize', 9);
+            xlim(axImg, [-1 1]); ylim(axImg, [-1 1]);
+            grid(axImg, 'on');
+        end
     end
     
     function updateStateData()
@@ -456,9 +505,9 @@ function ESKF_GUI()
         
         % Row 1: Position (Indices 5:7)
         axPos = plotHandles.axes(1,1); cla(axPos);
-        plot(axPos, t, xt(5:7, :)', '-'); 
+        plot(axPos, t, xt(5:7, :)', '-', 'LineWidth', 1.5); 
         set(axPos, 'ColorOrderIndex', 1);
-        plot(axPos, t, xe(5:7, :)', '--');
+        plot(axPos, t, xe(5:7, :)', '--', 'LineWidth', 1.5);
         xlabel(axPos, 'Time (s)'); ylabel(axPos, 'Position (m)');
         legend(axPos, 'Tx','Ty','Tz','Ex','Ey','Ez', 'Location', 'best');
         title(axPos, 'Relative Position');
@@ -466,19 +515,19 @@ function ESKF_GUI()
         axPosErr = plotHandles.axes(1,2); cla(axPosErr);
         errP = xt(5:7,:) - xe(5:7,:);
         sigP = sqrt(Pd(4:6,:));
-        plot(axPosErr, t, errP', '-');
+        plot(axPosErr, t, errP', '-', 'LineWidth', 1.5);
         hold(axPosErr, 'on');
-        plot(axPosErr, t, 3*sigP(3,:), 'k--');
-        plot(axPosErr, t, -3*sigP(3,:), 'k--');
+        plot(axPosErr, t, 3*sigP(3,:), 'k--', 'LineWidth', 1.5);
+        plot(axPosErr, t, -3*sigP(3,:), 'k--', 'LineWidth', 1.5);
         xlabel(axPosErr, 'Time (s)'); ylabel(axPosErr, 'Error (m)');
         legend(axPosErr, 'Err X', 'Err Y', 'Err Z', '±3σ', 'Location', 'best');
         title(axPosErr, 'Position Error with 3σ bounds');
         
         % Row 2: Velocity (Indices 8:10)
         axVel = plotHandles.axes(2,1); cla(axVel);
-        plot(axVel, t, xt(8:10, :)', '-');
+        plot(axVel, t, xt(8:10, :)', '-', 'LineWidth', 1.5);
         set(axVel, 'ColorOrderIndex', 1);
-        plot(axVel, t, xe(8:10, :)', '--');
+        plot(axVel, t, xe(8:10, :)', '--', 'LineWidth', 1.5);
         xlabel(axVel, 'Time (s)'); ylabel(axVel, 'Velocity (m/s)');
         legend(axVel, 'Tx','Ty','Tz','Ex','Ey','Ez', 'Location', 'best');
         title(axVel, 'Relative Velocity');
@@ -486,19 +535,19 @@ function ESKF_GUI()
         axVelErr = plotHandles.axes(2,2); cla(axVelErr);
         errV = xt(8:10,:) - xe(8:10,:);
         sigV = sqrt(Pd(7:9,:));
-        plot(axVelErr, t, errV', '-');
+        plot(axVelErr, t, errV', '-', 'LineWidth', 1.5);
         hold(axVelErr, 'on');
-        plot(axVelErr, t, 3*sigV(3,:), 'k--');
-        plot(axVelErr, t, -3*sigV(3,:), 'k--');
+        plot(axVelErr, t, 3*sigV(3,:), 'k--', 'LineWidth', 1.5);
+        plot(axVelErr, t, -3*sigV(3,:), 'k--', 'LineWidth', 1.5);
         xlabel(axVelErr, 'Time (s)'); ylabel(axVelErr, 'Error (m/s)');
         legend(axVelErr, 'Err X', 'Err Y', 'Err Z', '±3σ', 'Location', 'best');
         title(axVelErr, 'Velocity Error with 3σ bounds');
         
         % Row 3: Image (Indices 11:12)
         axImg = plotHandles.axes(3,1); cla(axImg);
-        plot(axImg, t, xt(11:12, :)', '-');
+        plot(axImg, t, xt(11:12, :)', '-', 'LineWidth', 1.5);
         set(axImg, 'ColorOrderIndex', 1);
-        plot(axImg, t, xe(11:12, :)', '--');
+        plot(axImg, t, xe(11:12, :)', '--', 'LineWidth', 1.5);
         xlabel(axImg, 'Time (s)'); ylabel(axImg, 'Norm Coord');
         legend(axImg, 'True px', 'True py', 'Est px', 'Est py', 'Location', 'best');
         title(axImg, 'Normalized Image Features');
@@ -506,10 +555,10 @@ function ESKF_GUI()
         axImgErr = plotHandles.axes(3,2); cla(axImgErr);
         errI = xt(11:12,:) - xe(11:12,:);
         sigI = sqrt(Pd(10:11,:));
-        plot(axImgErr, t, errI', '-');
+        plot(axImgErr, t, errI', '-', 'LineWidth', 1.5);
         hold(axImgErr, 'on');
-        plot(axImgErr, t, 3*sigI(2,:), 'k--');
-        plot(axImgErr, t, -3*sigI(2,:), 'k--');
+        plot(axImgErr, t, 3*sigI(2,:), 'k--', 'LineWidth', 1.5);
+        plot(axImgErr, t, -3*sigI(2,:), 'k--', 'LineWidth', 1.5);
         xlabel(axImgErr, 'Time (s)'); ylabel(axImgErr, 'Error');
         legend(axImgErr, 'Err px', 'Err py', '±3σ', 'Location', 'best');
         title(axImgErr, 'Image Error with 3σ bounds');
@@ -753,6 +802,10 @@ function ESKF_GUI()
     % Initialize once
     % sim.initialize(); % Defer init to first run or use defaults
     
+    % Initialize 3D view at startup so plot area isn't blank
+    appState.currentView = ''; % Clear so changeView doesn't return early
+    changeView([], [], '3D');
+    
     %% Helper: Read Configuration
     function cfg = readConfigFromGUI()
         % Start with current config to preserve unexposed fields (like init_errors)
@@ -772,6 +825,14 @@ function ESKF_GUI()
         cfg.init_cond.p_tgt = str2num(m.ed_p_tgt.String)'; 
         cfg.init_cond.v_int = str2num(m.ed_v_int.String)';
         cfg.init_cond.v_tgt = str2num(m.ed_v_tgt.String)';
+        
+        % Initial Euler angles [Yaw, Pitch, Roll] in degrees -> convert to radians
+        euler_deg = str2num(m.ed_euler_int.String);
+        cfg.init_cond.euler_int = euler_deg(:)' * pi/180; % Store as [yaw, pitch, roll] in radians
+        
+        % Controller constraints
+        cfg.controller.max_velocity = str2double(m.ed_v_max.String);
+        cfg.controller.max_omega = str2double(m.ed_w_max.String);
         
         % Sensors
         s = panelHandles.sensors;
@@ -797,6 +858,14 @@ function ESKF_GUI()
         cfg.filter.init_sigma.pbar = str2double(f.ed_sig_pbar.String);
         cfg.filter.init_sigma.b_gyr = str2double(f.ed_sig_bg.String);
         cfg.filter.init_sigma.b_acc = str2double(f.ed_sig_ba.String);
+        
+        % Initial errors (from new GUI fields)
+        cfg.filter.init_errors.position = str2double(f.ed_err_pos.String) * ones(3,1);
+        cfg.filter.init_errors.velocity = str2double(f.ed_err_vel.String) * ones(3,1);
+        cfg.filter.init_errors.euler_deg = str2double(f.ed_err_att.String) * ones(3,1);
+        cfg.filter.init_errors.pbar = str2double(f.ed_err_pbar.String) * ones(2,1);
+        cfg.filter.init_errors.b_gyr = str2double(f.ed_err_bg.String) * ones(3,1);
+        cfg.filter.init_errors.b_acc = str2double(f.ed_err_ba.String) * ones(3,1);
 
         % Limit t_total if needed, or leave as default
         % cfg.t_total = 30; 

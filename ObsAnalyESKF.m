@@ -1,12 +1,85 @@
 %% Observability Analysis of ESKF using Gramian SVD
-% Computes the observability Gramian numerically and analyzes 
-% error state observability using SVD decomposition.
+% =========================================================================
+%                    OBSERVABILITY ANALYSIS METHODOLOGY
+% =========================================================================
 %
-% Error State Kalman Filter (ESKF) Analysis
-% Error state: δx = [δθ(3), δpr(3), δvr(3), δpbar(2), δbgyro(3), δbacc(3)]
+% This script performs observability analysis for the Error-State Kalman 
+% Filter (ESKF) using the Observability Gramian and its Singular Value 
+% Decomposition (SVD).
 %
-% Based on: "High-Speed Interception Multicopter Control by Image-Based Visual Servoing"
-% by Kun Yang et al.
+% -------------------------------------------------------------------------
+%                    1. OBSERVABILITY GRAMIAN CONSTRUCTION
+% -------------------------------------------------------------------------
+% The observability Gramian (L) quantifies how well the system states can 
+% be inferred from the measurements over a time horizon. It is constructed 
+% by accumulating the information from the measurement matrix H projected 
+% through the state transition:
+%
+%   L = sum_{k=0}^{N} ( Phi_k' * H' * H * Phi_k )
+%
+% where:
+%   - Phi_k = Fd_{k-1} * Fd_{k-2} * ... * Fd_0  (accumulated state transition)
+%   - Fd_k  = Discretized error-state transition Jacobian at step k
+%   - H     = Measurement Jacobian (maps error states to measurements)
+%
+% -------------------------------------------------------------------------
+%                    2. SVD DECOMPOSITION FOR OBSERVABILITY
+% -------------------------------------------------------------------------
+% The Gramian is decomposed using Singular Value Decomposition:
+%
+%   L = U * S * V'
+%
+% where:
+%   - U = Left singular vectors (orthonormal basis in state space)
+%   - S = Diagonal matrix of singular values (sigma_1 >= sigma_2 >= ... >= sigma_n)
+%   - V = Right singular vectors
+%
+% INTERPRETATION:
+%   - Singular values (sigma_i) indicate the "strength" of observability 
+%     in each principal direction
+%   - Singular values near ZERO indicate UNOBSERVABLE directions
+%   - The corresponding singular vector shows WHICH states are unobservable
+%   - Condition number = sigma_max / sigma_min indicates overall observability quality
+%
+% -------------------------------------------------------------------------
+%                    3. STATE-WISE OBSERVABILITY MEASURE
+% -------------------------------------------------------------------------
+% To determine observability of individual states, we compute:
+%
+%   mu_i = sqrt( sum_j ( sigma_j^2 * u_ij^2 ) )
+%
+% where:
+%   - mu_i   = Observability measure for state i
+%   - u_ij   = Element (i,j) of the U matrix
+%   - sigma_j = j-th singular value
+%
+% States with mu_i << max(mu) are poorly observable or unobservable.
+%
+% -------------------------------------------------------------------------
+%                    4. OBSERVABILITY RESULTS BY SENSOR CONFIGURATION
+% -------------------------------------------------------------------------
+% CAMERA + RADAR (Both sensors enabled):
+%   - System is FULLY OBSERVABLE
+%   - All singular values are above threshold
+%   - All error states can be estimated
+%
+% CAMERA ONLY (Radar disabled):
+%   - delta_p_r (relative position) is UNOBSERVABLE
+%   - Component of delta_v_r along camera z-axis is UNOBSERVABLE
+%   - Camera provides bearing but not range information
+%
+% RADAR ONLY (Camera disabled):
+%   - delta_pbar (image features) is UNOBSERVABLE
+%   - Radar provides range but no image-plane information
+%
+% -------------------------------------------------------------------------
+% Error State: delta_x = [delta_theta(3), delta_pr(3), delta_vr(3), 
+%                         delta_pbar(2), delta_bgyr(3), delta_bacc(3)]
+%
+% Reference: "High-Speed Interception Multicopter Control by Image-Based 
+%            Visual Servoing" by Kun Yang et al.
+% =========================================================================
+
 
 clear; clc; close all;
 
@@ -52,8 +125,8 @@ p_r_true = p_int - p_tgt;
 v_r_true = v_int - v_tgt;
 
 % IMU biases
-b_gyr_true = 0*[0.005; -0.003; 0.002];
-b_acc_true = 0*[0.02; -0.01; 0.015];
+b_gyr_true = [0.005; -0.003; 0.002];
+b_acc_true = [0.02; -0.01; 0.015];
 
 % Compute initial image features
 pbar_true = compute_image_features(p_r_true, q_true, R_b2c);
@@ -67,6 +140,13 @@ x_true = [q_true; p_r_true; v_r_true; pbar_true; b_gyr_true; b_acc_true];
 H = zeros(5, 17);
 H(1:2, idx_dpbar) = eye(2);   % pbar measurement
 H(3:5, idx_dpr) = eye(3);     % RADAR position measurement
+
+useCam = true;
+useRadar = true;
+dt_image = 1/30;          % Image update rate: ~30 Hz
+dt_radar = 1/0.5;         % RADAR update rate: 0.5 Hz
+image_update_counter = 0;
+radar_update_counter = 0;
 
 %% ======================== OBSERVABILITY GRAMIAN COMPUTATION ========================
 % Initialize Gramian (17x17 for error state)
@@ -119,6 +199,22 @@ for k = 1:N_steps
     Phi_k = Fd_k * Phi_k;
     
     %% Accumulate Observability Gramian: L = sum( Phi_k' * H' * H * Phi_k )
+    radar_update_counter = radar_update_counter + 1; 
+    if radar_update_counter > dt_radar/dt_imu && useRadar
+        radar_update_counter = 0;
+        H(3:5, idx_dpr) = eye(3);     % RADAR position measurement
+    else
+        H(3:5, idx_dpr) = 0*eye(3);     % RADAR position measurement
+    end
+
+    image_update_counter = image_update_counter + 1; 
+    if image_update_counter > dt_image/dt_imu && useCam
+        image_update_counter = 0;
+        H(1:2, idx_dpbar) = eye(2);     % RADAR position measurement
+    else
+        H(1:2, idx_dpbar) = 0*eye(2);     % RADAR position measurement
+    end
+
     L_k = L_k + Phi_k' * (H' * H) * Phi_k;
     
     %% Progress

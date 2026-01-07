@@ -70,7 +70,7 @@ function [x_true, p_int_new, v_int_new, p_tgt_new, v_tgt_new, omega_true, a_body
     
     %% ==================== TARGET DYNAMICS ====================
     % Target acceleration (modify for different target behaviors)
-    a_tgt = 0.01*[1; 2; -3];  % Static target
+    a_tgt = 0.01*0*[1; 2; -3];  % Static target
     
     % Propagate target velocity and position
     v_tgt_new = v_tgt + a_tgt * dt;

@@ -65,13 +65,20 @@ classdef ESKFSimulation < handle
             imu_params.sigma_a_w = cfg.imu_noise.accel_w;
             imu_params.sigma_omega_w = cfg.imu_noise.gyro_w;
             imu_params.omega_b_init = [0.005; -0.003; 0.002]; 
-            imu_params.a_b_init = [0.02; -0.01; 0.015];
+            imu_params.a_b_init     = [0.02; -0.01; 0.015];
             obj.imu = IMUModel(imu_params);
             
             % 2. Controller
             ctrl_params = struct();
             ctrl_params.Kp_att = 5;
             ctrl_params.Kp_acc = 1;
+            % Use GUI-specified constraints if available
+            if isfield(cfg, 'controller') && isfield(cfg.controller, 'max_omega')
+                ctrl_params.max_omega = cfg.controller.max_omega;
+            end
+            if isfield(cfg, 'controller') && isfield(cfg.controller, 'max_velocity')
+                ctrl_params.max_acc = cfg.controller.max_velocity; % Use as max_acc for now
+            end
             obj.ctrl = InterceptorController(ctrl_params);
             
             % 3. ErrorStateKalmanFilter
@@ -88,8 +95,12 @@ classdef ESKFSimulation < handle
             R_c2b = [0 0 1; 1 0 0; 0 1 0];
             R_b2c = R_c2b';
             
-            % Initial Attitude
-            euler_init = deg2rad([45,20,15]); % Could be configurable
+            % Initial Attitude (from config or default)
+            if isfield(cfg.init_cond, 'euler_int') && ~isempty(cfg.init_cond.euler_int)
+                euler_init = cfg.init_cond.euler_int; % Already in radians from GUI
+            else
+                euler_init = deg2rad([45, 20, 15]); % Default [Yaw, Pitch, Roll]
+            end
             q_true = eul2quat(euler_init, 'ZYX')';
             
             % Initial Image Features
@@ -311,7 +322,7 @@ classdef ESKFSimulation < handle
             cfg.filter.init_sigma.attitude = 0.05;
             cfg.filter.init_sigma.position = 3;
             cfg.filter.init_sigma.velocity = 0.5;
-            cfg.filter.init_sigma.pbar = 0.1;
+            cfg.filter.init_sigma.pbar = 0.01;
             cfg.filter.init_sigma.b_gyr = 0.005;
             cfg.filter.init_sigma.b_acc = 0.05;
         end

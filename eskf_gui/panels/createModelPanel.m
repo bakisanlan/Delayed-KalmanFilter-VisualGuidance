@@ -21,21 +21,21 @@ function [components, handles] = createModelPanel(pix, panelX, panelY, panelWidt
         uicontrol(parent, 'Style', 'text', 'String', label, ...
             'Units', 'normalized', 'Position', [0.05, y, 0.6, 0.025], 'HorizontalAlignment', 'left', 'FontSize', 8);
         
-        hEdit = uicontrol(parent, 'Style', 'edit', 'String', num2str(initV), ...
+        hEdit = uicontrol(parent, 'Style', 'edit', 'String', num2str(initV, '%g'), ...
             'Units', 'normalized', 'Position', [0.7, y, 0.25, 0.03], 'Tag', [tag '_edit']);
             
         hSlider = uicontrol(parent, 'Style', 'slider', 'Min', minV, 'Max', maxV, 'Value', initV, ...
             'Units', 'normalized', 'Position', [0.05, y-0.03, 0.9, 0.025], 'Tag', [tag '_slider']);
         
-        % Link slider and edit
-        hSlider.Callback = @(src,~) set(hEdit, 'String', num2str(src.Value, '%.4f'));
+        % Link slider and edit (use %g for scientific notation on small values)
+        hSlider.Callback = @(src,~) set(hEdit, 'String', num2str(src.Value, '%g'));
         hEdit.Callback = @(src,~) set(hSlider, 'Value', max(minV, min(maxV, str2double(src.String))));
     end
 
-    [handles.sli_acc_n, handles.ed_acc_n] = createSliderGroup('Accel Noise (m/s^2)', yPos, 0, 0.2, 0.1, 'acc_n'); yPos = yPos - 0.07;
-    [handles.sli_gyr_n, handles.ed_gyr_n] = createSliderGroup('Gyro Noise (rad/s)', yPos, 0, 0.05, 0.01, 'gyr_n'); yPos = yPos - 0.07;
-    [handles.sli_acc_w, handles.ed_acc_w] = createSliderGroup('Accel Bias RW', yPos, 0, 1e-3, 1e-4, 'acc_w'); yPos = yPos - 0.07;
-    [handles.sli_gyr_w, handles.ed_gyr_w] = createSliderGroup('Gyro Bias RW', yPos, 0, 5e-5, 1e-5, 'gyr_w'); yPos = yPos - 0.07;
+    [handles.sli_acc_n, handles.ed_acc_n] = createSliderGroup('Accel Noise (m/s^2)', yPos, 0, 1.0, 0.1, 'acc_n'); yPos = yPos - 0.07;
+    [handles.sli_gyr_n, handles.ed_gyr_n] = createSliderGroup('Gyro Noise (rad/s)', yPos, 0, 0.2, 0.01, 'gyr_n'); yPos = yPos - 0.07;
+    [handles.sli_acc_w, handles.ed_acc_w] = createSliderGroup('Accel Bias RW', yPos, 0, 1e-2, 1e-4, 'acc_w'); yPos = yPos - 0.07;
+    [handles.sli_gyr_w, handles.ed_gyr_w] = createSliderGroup('Gyro Bias RW', yPos, 0, 1e-3, 1e-5, 'gyr_w'); yPos = yPos - 0.07;
     
     % Frequency
     uicontrol(parent, 'Style', 'text', 'String', 'IMU Frequency (Hz):', ...
@@ -65,6 +65,11 @@ function [components, handles] = createModelPanel(pix, panelX, panelY, panelWidt
     
     uicontrol(parent, 'Style', 'text', 'String', 'Tgt v_n (m/s):', 'Units', 'normalized', 'Position', [0.05, yPos, 0.4, 0.025], 'HorizontalAlignment', 'left');
     handles.ed_v_tgt = uicontrol(parent, 'Style', 'edit', 'String', '0 0 0', 'Units', 'normalized', 'Position', [0.5, yPos, 0.45, 0.03]);
+    yPos = yPos - 0.05;
+    
+    % Initial Attitude
+    uicontrol(parent, 'Style', 'text', 'String', 'Int Euler [Y P R] (deg):', 'Units', 'normalized', 'Position', [0.05, yPos, 0.4, 0.025], 'HorizontalAlignment', 'left');
+    handles.ed_euler_int = uicontrol(parent, 'Style', 'edit', 'String', '0 0 0', 'Units', 'normalized', 'Position', [0.5, yPos, 0.45, 0.03]);
     yPos = yPos - 0.05;
     
     % Max Constraints
