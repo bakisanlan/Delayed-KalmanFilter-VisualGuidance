@@ -80,7 +80,8 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
     if (config["measurement_noise"]) {
         const auto& meas = config["measurement_noise"];
         params.sigma_img = getScalar<double>(meas, "image_sigma", 0.005);
-        params.sigma_radar = getScalar<double>(meas, "radar_sigma", 1.0);
+        params.sigma_radar_pos = getScalar<double>(meas, "radar_pos_sigma", 1.0);
+        params.sigma_radar_vel = getScalar<double>(meas, "radar_vel_sigma", 0.5);
     }
     
     // === Initial Covariance ===
@@ -104,6 +105,13 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
         params.history_length = getScalar<int>(config["history"], "buffer_length", 25);
     }
     
+    // === ZUPT (Zero Velocity Update) ===
+    if (config["zupt"]) {
+        const auto& zupt = config["zupt"];
+        params.zupt_alpha = getScalar<double>(zupt, "alpha", 50.0);
+        params.chi2_threshold_zupt = getScalar<double>(zupt, "chi2_threshold", 12.59);
+    }
+    
     return params;
 }
 
@@ -121,8 +129,9 @@ void printConfig(const ESKFParams& params) {
     std::cout << "  σ_aw (acc RW): " << params.sigma_a_w << " m/s²√s\n";
     
     std::cout << "\nMeasurement Noise:\n";
-    std::cout << "  Image sigma:  " << params.sigma_img << "\n";
-    std::cout << "  Radar sigma:  " << params.sigma_radar << " m\n";
+    std::cout << "  Image sigma:     " << params.sigma_img << "\n";
+    std::cout << "  Radar pos sigma: " << params.sigma_radar_pos << " m\n";
+    std::cout << "  Radar vel sigma: " << params.sigma_radar_vel << " m/s\n";
     
     std::cout << "\nInitial Covariance (std dev):\n";
     std::cout << "  Attitude: " << params.init_sigma_attitude << " rad\n";
@@ -133,6 +142,10 @@ void printConfig(const ESKFParams& params) {
     std::cout << "  Acc bias: " << params.init_sigma_bacc << " m/s²\n";
     
     std::cout << "\nHistory buffer: " << params.history_length << " entries\n";
+    
+    std::cout << "\nZUPT Parameters:\n";
+    std::cout << "  Alpha:         " << params.zupt_alpha << "\n";
+    std::cout << "  Chi2 thresh:   " << params.chi2_threshold_zupt << " (6 DoF)\n";
     std::cout << "=============================================\n\n";
 }
 

@@ -111,20 +111,29 @@ if(ROS2_FOUND)
   # ROS2 Node
   add_executable(eskf_node src/eskf_node.cpp)
   
-  target_link_libraries(eskf_node PRIVATE
-    eskf_core
+  # Link dependencies using target_link_libraries with keyword signature
+  # Note: We must link eskf_core and ROS2 deps together to avoid signature conflicts
+  target_link_libraries(eskf_node
+    PUBLIC
+      ${rclcpp_TARGETS}
+      ${sensor_msgs_TARGETS}
+      ${geometry_msgs_TARGETS}
+      ${std_msgs_TARGETS}
+    PRIVATE
+      eskf_core
   )
   
-  ament_target_dependencies(eskf_node
-    rclcpp
-    sensor_msgs
-    geometry_msgs
-    std_msgs
+  # Add include directories from ROS2 packages
+  target_include_directories(eskf_node PUBLIC
+    ${rclcpp_INCLUDE_DIRS}
+    ${sensor_msgs_INCLUDE_DIRS}
+    ${geometry_msgs_INCLUDE_DIRS}
+    ${std_msgs_INCLUDE_DIRS}
   )
   
   if(rosidl_default_generators_FOUND)
     rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
-    target_link_libraries(eskf_node PRIVATE ${cpp_typesupport_target})
+    target_link_libraries(eskf_node PUBLIC ${cpp_typesupport_target})
   endif()
   
   # Install

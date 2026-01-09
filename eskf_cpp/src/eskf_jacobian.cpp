@@ -182,4 +182,35 @@ ESKFJacobians computeESKFJacobians(
     return jac;
 }
 
+// ============================================================================
+// ZUPT (Zero Velocity Update) Jacobian
+// ============================================================================
+
+ZUPTJacobian computeZUPTJacobian(const NominalState& x_nominal) {
+    using namespace state_access;
+    using namespace math;
+    
+    ZUPTJacobian H;
+    H.setZero();
+    
+    // Get current attitude
+    const Quaterniond q = getQuaternion(x_nominal);
+    const RotationMatrix R_b2e = quaternionToRotation(q);
+    
+    // Gravity in body frame: R_b2e' * g_ned = R_e2b * g_ned
+    const Vector3d g_body = R_b2e.transpose() * constants::GRAVITY_NED;
+    
+    // === Row 0-2 (Accelerometer): H1 = [skew(R'g)  0₃  0₃  0₂  0₃  -I₃] ===
+    // Linearization comes from: R_true' = (I - skew(δθ)) * R_nom'
+    // So: R_true' * g = R_nom'*g - skew(δθ)*R_nom'*g = g_body - skew(δθ)*g_body
+    // Rearranging: -skew(δθ)*g_body = skew(g_body)*δθ
+    H.block<3,3>(0, error_idx::DTHETA_START) = skew(g_body);
+    H.block<3,3>(0, error_idx::DBACC_START) = -Eigen::Matrix3d::Identity();
+    
+    // === Row 3-5 (Gyroscope): H2 = [0₃  0₃  0₃  0₂  -I₃  0₃] ===
+    H.block<3,3>(3, error_idx::DBGYR_START) = -Eigen::Matrix3d::Identity();
+    
+    return H;
+}
+
 } // namespace eskf

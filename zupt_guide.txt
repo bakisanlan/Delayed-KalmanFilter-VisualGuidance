@@ -1,0 +1,15 @@
+
+# Measurement model
+a_body_true = a_body_accel - bias_a - \delta b_a + R'_true g 
+w_body_true = w_body_gyro - bias_w - \delta b_w 
+
+# Residuals
+y1 = 0 - (a_body_accel - bias_a - \delta b_a + R' g )
+y2 = 0 - (w_body_gyro - bias_w - \delta b_w )
+
+# Measuremetn matrix
+R'_true = (I3 - skew(\delta theta))R'
+\delta x = [\delta theta \delta pr  \delta vr \delta pbar \delta b_w \delta b_a]
+H1 = [skew(R'g)  0_3 0_3 0_2  0_3 -I3]
+H2 = [0_3        0_3 0_3 0_2 -I3   0_3]
+H = [H1; H2]

@@ -331,11 +331,16 @@ int main(int argc, char** argv) {
         if (radar_update_counter >= radar_sample_idx) {
             radar_update_counter = 0;
             
-            // Generate noisy measurement
-            Vector3d z_radar = p_r_true;
-            z_radar(0) += params.sigma_radar * normal(rng);
-            z_radar(1) += params.sigma_radar * normal(rng);
-            z_radar(2) += params.sigma_radar * normal(rng);
+            // Generate noisy measurement (position + velocity = 6D)
+            Vector6d z_radar;
+            z_radar.head<3>() = p_r_true;
+            z_radar.tail<3>() = v_r_true;
+            z_radar(0) += params.sigma_radar_pos * normal(rng);
+            z_radar(1) += params.sigma_radar_pos * normal(rng);
+            z_radar(2) += params.sigma_radar_pos * normal(rng);
+            z_radar(3) += params.sigma_radar_vel * normal(rng);
+            z_radar(4) += params.sigma_radar_vel * normal(rng);
+            z_radar(5) += params.sigma_radar_vel * normal(rng);
             
             eskf.correctRadar(z_radar);
         }

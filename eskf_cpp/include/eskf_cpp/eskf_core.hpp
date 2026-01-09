@@ -126,6 +126,68 @@ public:
     Vector6d correctRadar(const Vector6d& z_radar);
     
     // ========================================================================
+    // Zero Velocity Update (ZUPT)
+    // ========================================================================
+    
+    /**
+     * @brief Check if platform is stationary using chi-square test
+     * 
+     * Tests if IMU readings are consistent with zero motion hypothesis:
+     *   y = 0 - [a_meas - b_a - R'g; ω_meas - b_ω]
+     *   chi² = y' * (H*P*H' + α*R)^-1 * y < threshold
+     * 
+     * @param omega_meas Measured angular velocity [rad/s]
+     * @param a_meas Measured linear acceleration [m/s²]
+     * @return true if stationary condition detected
+     */
+    bool detectZUPT(const Vector3d& omega_meas, const Vector3d& a_meas);
+    
+    /**
+     * @brief Apply zero velocity update correction
+     * 
+     * Updates orientation (roll/pitch) and IMU biases when stationary.
+     * 
+     * @param omega_meas Measured angular velocity [rad/s]
+     * @param a_meas Measured linear acceleration [m/s²]
+     * @return Innovation vector (6x1: accel + gyro residuals)
+     */
+    Vector6d correctZUPT(const Vector3d& omega_meas, const Vector3d& a_meas);
+    
+    /**
+     * @brief Permanently disable ZUPT (called when platform starts moving)
+     */
+    void disableZUPT();
+    
+    /**
+     * @brief Notify that first radar measurement has been received
+     */
+    void notifyRadarReceived();
+    
+    /**
+     * @brief Check if ZUPT is currently enabled
+     * @return true if ZUPT is still active
+     */
+    bool isZUPTEnabled() const { return zupt_enabled_; }
+    
+    /**
+     * @brief Check if ZUPT was triggered at least once
+     * @return true if ZUPT correction was applied at least once
+     */
+    bool wasZUPTTriggered() const { return zupt_triggered_once_; }
+    
+    /**
+     * @brief Check if radar measurement has been received
+     * @return true if first radar measurement was received
+     */
+    bool wasRadarReceived() const { return radar_received_; }
+    
+    /**
+     * @brief Check if image measurement has been received (pbar observable)
+     * @return true if first image measurement was received
+     */
+    bool wasImageReceived() const { return first_image_received_; }
+    
+    // ========================================================================
     // State Access
     // ========================================================================
     
@@ -255,6 +317,15 @@ private:
     Vector3d accel_accum_;           ///< Accumulated acceleration
     int imu_count_;                  ///< Number of accumulated samples
     int samples_per_eskf_;           ///< IMU samples per ESKF update
+    
+    // ZUPT (Zero Velocity Update) state
+    bool zupt_enabled_ = true;       ///< ZUPT active (permanently disabled once moving)
+    bool zupt_triggered_once_ = false; ///< At least one successful ZUPT
+    bool radar_received_ = false;    ///< First radar measurement received
+    ZUPTNoise R_zupt_;               ///< ZUPT measurement noise (6x6)
+    
+    // Pbar observability
+    bool first_image_received_ = false; ///< First image measurement received (pbar observable)
 };
 
 // ============================================================================

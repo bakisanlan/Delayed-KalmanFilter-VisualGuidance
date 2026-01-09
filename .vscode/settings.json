@@ -1,5 +1,6 @@
 {
     "workbench.preferredDarkColorTheme": "Default Light Modern",
     "workbench.colorTheme": "Default Light Modern",
-    "workbench.preferredHighContrastColorTheme": "Default Light Modern"
+    "workbench.preferredHighContrastColorTheme": "Default Light Modern",
+    "cmake.sourceDirectory": "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_cpp"
 }

@@ -55,4 +55,20 @@ ESKFJacobians computeESKFJacobians(
     double dt,
     const RotationMatrix& R_b2c);
 
+/**
+ * @brief Compute ZUPT measurement Jacobian
+ * 
+ * When stationary, the measurement model is:
+ *   a_meas ≈ bias_a + R_b2e' * g (plus noise)
+ *   ω_meas ≈ bias_ω (plus noise)
+ * 
+ * The 6x17 Jacobian H relates error state to residuals:
+ *   H1 = [skew(R_b2e'*g)  0₃  0₃  0₂  0₃  -I₃]  (accel rows)
+ *   H2 = [0₃              0₃  0₃  0₂  -I₃  0₃]  (gyro rows)
+ * 
+ * @param x_nominal Current nominal state (for extracting quaternion/biases)
+ * @return 6x17 ZUPT measurement Jacobian
+ */
+ZUPTJacobian computeZUPTJacobian(const NominalState& x_nominal);
+
 } // namespace eskf

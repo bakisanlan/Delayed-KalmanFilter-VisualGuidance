@@ -48,6 +48,11 @@ using RadarJacobian = Eigen::Matrix<double, 6, 17>;      ///< H_radar (6x17)
 using ImageNoise = Eigen::Matrix2d;                      ///< R_img
 using RadarNoise = Eigen::Matrix<double, 6, 6>;          ///< R_radar (6x6)
 
+// ZUPT (Zero Velocity Update) matrices
+using ZUPTMeasurement = Vector6d;                        ///< [accel; gyro] residual
+using ZUPTJacobian = Eigen::Matrix<double, 6, 17>;       ///< H_zupt
+using ZUPTNoise = Eigen::Matrix<double, 6, 6>;           ///< R_zupt
+
 // Rotation matrix
 using RotationMatrix = Eigen::Matrix3d;
 
@@ -244,6 +249,10 @@ struct ESKFParams {
     // chi2inv(0.9999, DoF) - 99.99% confidence level
     double chi2_threshold_image = 18.42; ///< 2 DoF image measurement
     double chi2_threshold_radar = 27.86; ///< 6 DoF radar measurement
+    
+    // ZUPT (Zero Velocity Update) parameters
+    double zupt_alpha = 1.0;             ///< Noise inflation for ZUPT chi-square test
+    double chi2_threshold_zupt = 12.59;   ///< 6 DoF, 95% confidence (chi2inv(0.95, 6))
 };
 
 // ============================================================================

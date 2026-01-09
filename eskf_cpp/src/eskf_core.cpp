@@ -44,6 +44,11 @@ ErrorStateKalmanFilter::ErrorStateKalmanFilter(const ESKFParams& params)
     H_img_ = getImageMeasurementMatrix();
     H_radar_ = getRadarMeasurementMatrix();
     
+    // ZUPT noise: use IMU noise parameters for stationary detection
+    R_zupt_.setZero();
+    R_zupt_.block<3,3>(0, 0) = params_.sigma_a_n * params_.sigma_a_n * Eigen::Matrix3d::Identity();
+    R_zupt_.block<3,3>(3, 3) = params_.sigma_omega_n * params_.sigma_omega_n * Eigen::Matrix3d::Identity();
+    
     // Initialize error covariance
     P_ = createInitialCovariance();
     
@@ -126,6 +131,26 @@ void ErrorStateKalmanFilter::predict(const Vector3d& omega_meas,
     ErrorCovariance P_new;
     P_new.noalias() = jac.Fd * P_ * jac.Fd.transpose() 
                     + jac.Gc * Qd_ * jac.Gc.transpose();
+    
+    // 4. If no image received yet, skip pbar propagation (keep initial covariance)
+    // This prevents pbar covariance from exploding when unobserved
+    if (!first_image_received_) {
+        // Zero off-diagonal correlations between pbar and other states
+        // Rows 9-10 (pbar), columns 0-8 and 11-16
+        P_new.block<2,9>(error_idx::DPBAR_START, 0).setZero();  // pbar row, before pbar
+        P_new.block<2,6>(error_idx::DPBAR_START, error_idx::DPBAR_START + 2).setZero();  // pbar row, after pbar
+        
+        // Columns 9-10 (pbar), rows 0-8 and 13-16
+        P_new.block<9,2>(0, error_idx::DPBAR_START).setZero();  // before pbar, pbar col
+        P_new.block<6,2>(error_idx::DPBAR_START + 2, error_idx::DPBAR_START).setZero();  // after pbar, pbar col
+        
+        // Restore pbar diagonal covariance to its initial/previous value
+        P_new.block<2,2>(error_idx::DPBAR_START, error_idx::DPBAR_START) = 
+            P_.block<2,2>(error_idx::DPBAR_START, error_idx::DPBAR_START);
+        
+        // Also keep pbar state frozen in nominal state
+        x_new.segment<2>(nominal_idx::PBAR_START) = x_.segment<2>(nominal_idx::PBAR_START);
+    }
     
     // Update state and covariance
     x_ = x_new;
@@ -263,6 +288,12 @@ Vector2d ErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
     // Re-propagate to current time
     repropagate(x_corrected, P_corrected, idx_delayed);
     
+    // Mark that first image has been received (pbar now observable)
+    if (!first_image_received_) {
+        first_image_received_ = true;
+        std::printf("[ESKF] First image received - pbar propagation enabled\n");
+    }
+    
     return innovation;
 }
 
@@ -311,6 +342,99 @@ Vector6d ErrorStateKalmanFilter::correctRadar(const Vector6d& z_radar) {
     P_ = resetCovariance(P_updated, delta_x);
     
     return innovation;
+}
+
+// ============================================================================
+// ZUPT (Zero Velocity Update)
+// ============================================================================
+
+bool ErrorStateKalmanFilter::detectZUPT(const Vector3d& omega_meas, 
+                                         const Vector3d& a_meas) {
+    if (!zupt_enabled_) {
+        return false;
+    }
+    
+    // Get current state estimates
+    const RotationMatrix R_b2e = math::quaternionToRotation(getQuaternion());
+    const Vector3d b_gyr = getGyroBias();
+    const Vector3d b_acc = getAccelBias();
+    
+    // Innovation: y = 0 - predicted_meas = -(meas - bias + R'g)
+    Vector6d z_tilde;
+    z_tilde.head<3>() = -(a_meas - b_acc + R_b2e.transpose() * constants::GRAVITY_NED);
+    z_tilde.tail<3>() = -(omega_meas - b_gyr);
+    
+    // Compute ZUPT Jacobian
+    const ZUPTJacobian H = computeZUPTJacobian(x_);
+    
+    // Chi-square test: z' * (H*P*H' + α*R)^-1 * z < χ²
+    const ZUPTNoise S = H * P_ * H.transpose() + params_.zupt_alpha * R_zupt_;
+    const double chi2 = z_tilde.transpose() * S.inverse() * z_tilde;
+    
+    // Diagnostic logging (throttled by caller)
+    static int debug_counter = 0;
+    if (++debug_counter % 200 == 0) {  // Log every ~1 second at 200Hz
+        std::printf("[ZUPT] chi2=%.2f, threshold=%.2f, residual: accel=[%.3f,%.3f,%.3f], gyro=[%.4f,%.4f,%.4f]\n",
+                    chi2, params_.chi2_threshold_zupt,
+                    z_tilde(0), z_tilde(1), z_tilde(2),
+                    z_tilde(3), z_tilde(4), z_tilde(5));
+    }
+    
+    return chi2 < params_.chi2_threshold_zupt;
+}
+
+Vector6d ErrorStateKalmanFilter::correctZUPT(const Vector3d& omega_meas, 
+                                              const Vector3d& a_meas) {
+    if (!zupt_enabled_) {
+        return Vector6d::Zero();
+    }
+    
+    // Get current state estimates
+    const RotationMatrix R_b2e = math::quaternionToRotation(getQuaternion());
+    const Vector3d b_gyr = getGyroBias();
+    const Vector3d b_acc = getAccelBias();
+    
+    // Innovation: y = 0 - predicted_meas = -(meas - bias + R'g)
+    Vector6d innovation;
+    innovation.head<3>() = -(a_meas - b_acc + R_b2e.transpose() * constants::GRAVITY_NED);
+    innovation.tail<3>() = -(omega_meas - b_gyr);
+    
+    // Compute ZUPT Jacobian (depends on current attitude)
+    const ZUPTJacobian H = computeZUPTJacobian(x_);
+    
+    // Innovation covariance (use non-inflated noise for update)
+    const Eigen::Matrix<double, 17, 6> PH_T = P_ * H.transpose();
+    const ZUPTNoise S = H * PH_T + R_zupt_;
+    
+    // Kalman gain
+    const Eigen::Matrix<double, 17, 6> K = PH_T * S.inverse();
+    
+    // Error state correction
+    const ErrorState delta_x = K * innovation;
+    
+    // Inject error into nominal state
+    x_ = injectErrorState(x_, delta_x);
+    
+    // Covariance update (Joseph form)
+    const StateJacobian I_KH = StateJacobian::Identity() - K * H;
+    ErrorCovariance P_updated = I_KH * P_ * I_KH.transpose() 
+                               + K * R_zupt_ * K.transpose();
+    
+    // ESKF reset
+    P_ = resetCovariance(P_updated, delta_x);
+    
+    // Mark that ZUPT was triggered at least once
+    zupt_triggered_once_ = true;
+    
+    return innovation;
+}
+
+void ErrorStateKalmanFilter::disableZUPT() {
+    zupt_enabled_ = false;
+}
+
+void ErrorStateKalmanFilter::notifyRadarReceived() {
+    radar_received_ = true;
 }
 
 // ============================================================================
