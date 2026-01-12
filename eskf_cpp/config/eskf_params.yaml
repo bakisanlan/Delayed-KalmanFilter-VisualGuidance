@@ -21,6 +21,7 @@ timing:
   image_rate_hz: 30         # Image measurement rate [Hz]
   radar_rate_hz: 0.5        # Radar measurement rate [Hz]
   image_delay_ms: 0        # Image processing delay [ms]
+  image_timeout_sec: 2.0    # Freeze pbar evolution after this many seconds without image [s]
 
 # IMU Noise Parameters (Paper Notation)
 #   σ_ãn [m/s²]     : Accelerometer measurement noise std
@@ -42,6 +43,8 @@ measurement_noise:
 # Chi-Square Gating Thresholds (for outlier rejection)
 # chi2inv(0.9999, DoF) - 99.99% confidence level
 chi2_gating:
+  enable_false_detection_image: true   # Enable chi-square gating for image measurements
+  enable_false_detection_radar: false   # Enable chi-square gating for radar measurements
   image_threshold: 18.42   # 2 DoF (pbar_x, pbar_y)
   radar_threshold: 27.86   # 6 DoF (pr, vr)
 

@@ -1,0 +1,13 @@
+TODO:
+    -implement zero velocity update for roll/pitch, IMU biases(done, checked, need to adjust chi-square and alpha)
+    -add chi-square test for zero velocity(done)
+    -create initialization logic properly(done)
+    -convert flu frame to frd frame for mavros IMU(done)
+    
+
+    -Fix divergence issue after camera pbar measurement(done)
+    -Add magnetometer measurements
+    -Make terminal logging better(done)
+    -Save ESKF estimation output
+    
+    

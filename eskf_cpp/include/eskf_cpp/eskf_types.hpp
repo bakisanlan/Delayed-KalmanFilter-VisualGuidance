@@ -216,6 +216,7 @@ struct ESKFParams {
     double dt_imu = 1.0 / 200.0;     ///< IMU sampling period [s]
     double dt_eskf = 1.0 / 200.0;    ///< ESKF update period [s]
     double image_delay = 0.080;       ///< Image processing delay [s]
+    double image_timeout_sec = 2.0;   ///< Freeze pbar after this many seconds without image [s]
     
     // IMU noise parameters (continuous-time)
     double sigma_omega_n = 0.01;     ///< Gyro noise std [rad/s]
@@ -247,6 +248,8 @@ struct ESKFParams {
     
     // Chi-square gating thresholds (for outlier rejection)
     // chi2inv(0.9999, DoF) - 99.99% confidence level
+    bool enable_false_detection_image = true;  ///< Enable chi-square gating for image
+    bool enable_false_detection_radar = true;  ///< Enable chi-square gating for radar
     double chi2_threshold_image = 18.42; ///< 2 DoF image measurement
     double chi2_threshold_radar = 27.86; ///< 6 DoF radar measurement
     

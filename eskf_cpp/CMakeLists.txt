@@ -45,6 +45,7 @@ find_package(ament_cmake QUIET)
 find_package(rclcpp QUIET)
 find_package(sensor_msgs QUIET)
 find_package(geometry_msgs QUIET)
+find_package(nav_msgs QUIET)
 find_package(std_msgs QUIET)
 find_package(rosidl_default_generators QUIET)
 
@@ -64,6 +65,7 @@ set(ESKF_CORE_SOURCES
   src/eskf_jacobian.cpp
   src/eskf_core.cpp
   src/eskf_config.cpp
+  src/utils/print.cpp
 )
 
 add_library(eskf_core STATIC ${ESKF_CORE_SOURCES})
@@ -118,6 +120,7 @@ if(ROS2_FOUND)
       ${rclcpp_TARGETS}
       ${sensor_msgs_TARGETS}
       ${geometry_msgs_TARGETS}
+      ${nav_msgs_TARGETS}
       ${std_msgs_TARGETS}
     PRIVATE
       eskf_core
@@ -128,6 +131,7 @@ if(ROS2_FOUND)
     ${rclcpp_INCLUDE_DIRS}
     ${sensor_msgs_INCLUDE_DIRS}
     ${geometry_msgs_INCLUDE_DIRS}
+    ${nav_msgs_INCLUDE_DIRS}
     ${std_msgs_INCLUDE_DIRS}
   )
   

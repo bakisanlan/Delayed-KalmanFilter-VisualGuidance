@@ -187,6 +187,22 @@ public:
      */
     bool wasImageReceived() const { return first_image_received_; }
     
+    /**
+     * @brief Set whether pbar evolution should be frozen
+     * 
+     * When frozen, pbar state and covariance are not propagated during prediction.
+     * This is useful when image measurements timeout.
+     * 
+     * @param frozen true to freeze pbar evolution, false to allow it
+     */
+    void setPbarFrozen(bool frozen) { pbar_frozen_ = frozen; }
+    
+    /**
+     * @brief Check if pbar evolution is currently frozen
+     * @return true if pbar is frozen
+     */
+    bool isPbarFrozen() const { return pbar_frozen_; }
+    
     // ========================================================================
     // State Access
     // ========================================================================
@@ -289,6 +305,13 @@ private:
      */
     ErrorCovariance createInitialCovariance() const;
     
+    /**
+     * @brief Clamp pbar covariance to prevent numerical issues
+     * 
+     * Handles NaN, negative values, and unbounded growth for pbar diagonal.
+     */
+    void clampPbarCovariance();
+    
     // ========================================================================
     // Member Variables
     // ========================================================================
@@ -326,6 +349,7 @@ private:
     
     // Pbar observability
     bool first_image_received_ = false; ///< First image measurement received (pbar observable)
+    bool pbar_frozen_ = false;          ///< Pbar evolution frozen (due to image timeout)
 };
 
 // ============================================================================

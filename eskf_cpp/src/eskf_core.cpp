@@ -6,9 +6,9 @@
  */
 
 #include "eskf_cpp/eskf_core.hpp"
+#include "eskf_cpp/utils/print.hpp"
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 
 namespace eskf {
 
@@ -132,9 +132,9 @@ void ErrorStateKalmanFilter::predict(const Vector3d& omega_meas,
     P_new.noalias() = jac.Fd * P_ * jac.Fd.transpose() 
                     + jac.Gc * Qd_ * jac.Gc.transpose();
     
-    // 4. If no image received yet, skip pbar propagation (keep initial covariance)
+    // 4. If no image received yet OR pbar is frozen (timeout), skip pbar propagation
     // This prevents pbar covariance from exploding when unobserved
-    if (!first_image_received_) {
+    if (!first_image_received_ || pbar_frozen_) {
         // Zero off-diagonal correlations between pbar and other states
         // Rows 9-10 (pbar), columns 0-8 and 11-16
         P_new.block<2,9>(error_idx::DPBAR_START, 0).setZero();  // pbar row, before pbar
@@ -155,6 +155,9 @@ void ErrorStateKalmanFilter::predict(const Vector3d& omega_meas,
     // Update state and covariance
     x_ = x_new;
     P_ = P_new;
+    
+    // Clamp pbar covariance to prevent numerical issues
+    // clampPbarCovariance();
     
     // Update history buffer
     IMUMeasurement imu(omega_meas, a_meas, timestamp);
@@ -262,9 +265,9 @@ Vector2d ErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
     // d² = y' * S^(-1) * y follows chi-square with 2 DoF
     const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
     
-    if (d_mahal_sq > params_.chi2_threshold_image) {
-        std::printf("[ESKF] IMAGE false detection rejected (Mahalanobis d²=%.2f > %.2f)\n",
-                    d_mahal_sq, params_.chi2_threshold_image);
+    if (params_.enable_false_detection_image && d_mahal_sq > params_.chi2_threshold_image) {
+        PRINT_WARNING(YELLOW "[IMAGE]: False detection rejected (Mahalanobis d²=%.2f > %.2f)" RESET "\n",
+                    d_mahal_sq, params_.chi2_threshold_image)
         return Vector2d::Zero();
     }
     
@@ -291,7 +294,7 @@ Vector2d ErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
     // Mark that first image has been received (pbar now observable)
     if (!first_image_received_) {
         first_image_received_ = true;
-        std::printf("[ESKF] First image received - pbar propagation enabled\n");
+        PRINT_INFO(BOLDGREEN "[IMAGE]: First image received - pbar propagation enabled" RESET "\n")
     }
     
     return innovation;
@@ -318,9 +321,9 @@ Vector6d ErrorStateKalmanFilter::correctRadar(const Vector6d& z_radar) {
     // d² = y' * S^(-1) * y follows chi-square with 6 DoF
     const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
     
-    if (d_mahal_sq > params_.chi2_threshold_radar) {
-        std::printf("[ESKF] RADAR false detection rejected (Mahalanobis d²=%.2f > %.2f)\n",
-                    d_mahal_sq, params_.chi2_threshold_radar);
+    if (params_.enable_false_detection_radar && d_mahal_sq > params_.chi2_threshold_radar) {
+        PRINT_WARNING(YELLOW "[RADAR]: False detection rejected (Mahalanobis d²=%.2f > %.2f)" RESET "\n",
+                    d_mahal_sq, params_.chi2_threshold_radar)
         return Vector6d::Zero();
     }
     
@@ -374,10 +377,10 @@ bool ErrorStateKalmanFilter::detectZUPT(const Vector3d& omega_meas,
     // Diagnostic logging (throttled by caller)
     static int debug_counter = 0;
     if (++debug_counter % 200 == 0) {  // Log every ~1 second at 200Hz
-        std::printf("[ZUPT] chi2=%.2f, threshold=%.2f, residual: accel=[%.3f,%.3f,%.3f], gyro=[%.4f,%.4f,%.4f]\n",
+        PRINT_DEBUG(CYAN "[ZUPT]: chi2=%.2f (thresh=%.2f), accel=[%.3f,%.3f,%.3f], gyro=[%.4f,%.4f,%.4f]" RESET "\n",
                     chi2, params_.chi2_threshold_zupt,
                     z_tilde(0), z_tilde(1), z_tilde(2),
-                    z_tilde(3), z_tilde(4), z_tilde(5));
+                    z_tilde(3), z_tilde(4), z_tilde(5))
     }
     
     return chi2 < params_.chi2_threshold_zupt;
@@ -597,6 +600,43 @@ ErrorCovariance ErrorStateKalmanFilter::createInitialCovariance() const {
         params_.init_sigma_bacc * params_.init_sigma_bacc * Eigen::Matrix3d::Identity();
     
     return P;
+}
+
+// ============================================================================
+// Pbar Covariance Clamping
+// ============================================================================
+
+void ErrorStateKalmanFilter::clampPbarCovariance() {
+    constexpr double MAX_PBAR_COVARIANCE = 10.0;  // Maximum allowed pbar variance
+    constexpr double MIN_PBAR_COVARIANCE = 1e-6;  // Minimum to reset NaN/negative
+    
+    // Clamp pbar covariance diagonal elements (indices 9 and 10 in error state)
+    for (int i = error_idx::DPBAR_START; i < error_idx::DPBAR_START + error_idx::DPBAR_SIZE; ++i) {
+        if (std::isnan(P_(i, i))) {
+            PRINT_WARNING(BOLDRED "[ESKF]: NaN in pbar covariance P(%d,%d)! Reset to %.2e" RESET "\n",
+                        i, i, MIN_PBAR_COVARIANCE)
+            P_(i, i) = MIN_PBAR_COVARIANCE;
+        }
+        if (P_(i, i) < 0) {
+            PRINT_WARNING(BOLDRED "[ESKF]: Negative variance P(%d,%d)=%.2e! Taking abs" RESET "\n",
+                        i, i, P_(i, i))
+            P_(i, i) = std::abs(P_(i, i));
+        }
+        // Prevent unbounded growth
+        if (P_(i, i) > MAX_PBAR_COVARIANCE) {
+            PRINT_WARNING(YELLOW "[ESKF]: Pbar P(%d,%d)=%.2f clamped to %.2f" RESET "\n",
+                        i, i, P_(i, i), MAX_PBAR_COVARIANCE)
+            P_(i, i) = MAX_PBAR_COVARIANCE;
+            
+            // Zero out off-diagonal elements in row i and column i to decorrelate pbar
+            for (int j = 0; j < P_.cols(); ++j) {
+                if (j != i) {
+                    P_(i, j) = 0.0;
+                    P_(j, i) = 0.0;
+                }
+            }
+        }
+    }
 }
 
 // ============================================================================

@@ -4,9 +4,9 @@
  */
 
 #include "eskf_cpp/eskf_config.hpp"
+#include "eskf_cpp/utils/print.hpp"
 
 #include <yaml-cpp/yaml.h>
-#include <iostream>
 #include <fstream>
 #include <stdexcept>
 
@@ -65,6 +65,7 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
         params.dt_imu = 1.0 / imu_rate;
         params.dt_eskf = 1.0 / eskf_rate;
         params.image_delay = getScalar<double>(timing, "image_delay_ms", 80.0) / 1000.0;
+        params.image_timeout_sec = getScalar<double>(timing, "image_timeout_sec", 2.0);
     }
     
     // === IMU Noise Parameters ===
@@ -100,6 +101,15 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
         params.R_b2c = parseRotationMatrix(config["camera"]["R_b2c"]);
     }
     
+    // === Chi-Square Gating ===
+    if (config["chi2_gating"]) {
+        const auto& chi2 = config["chi2_gating"];
+        params.enable_false_detection_image = getScalar<bool>(chi2, "enable_false_detection_image", true);
+        params.enable_false_detection_radar = getScalar<bool>(chi2, "enable_false_detection_radar", true);
+        params.chi2_threshold_image = getScalar<double>(chi2, "image_threshold", 18.42);
+        params.chi2_threshold_radar = getScalar<double>(chi2, "radar_threshold", 27.86);
+    }
+    
     // === History Buffer ===
     if (config["history"]) {
         params.history_length = getScalar<int>(config["history"], "buffer_length", 25);
@@ -116,37 +126,45 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
 }
 
 void printConfig(const ESKFParams& params) {
-    std::cout << "\n============ ESKF Configuration ============\n";
-    std::cout << "Timing:\n";
-    std::cout << "  IMU rate:    " << (1.0 / params.dt_imu) << " Hz\n";
-    std::cout << "  ESKF rate:   " << (1.0 / params.dt_eskf) << " Hz\n";
-    std::cout << "  Image delay: " << (params.image_delay * 1000) << " ms\n";
+    PRINT_INFO(BOLDCYAN "\n============ ESKF Configuration ============" RESET "\n")
     
-    std::cout << "\nIMU Noise (Paper Notation):\n";
-    std::cout << "  σ_ωn (gyro):   " << params.sigma_omega_n << " rad/s\n";
-    std::cout << "  σ_an (accel):  " << params.sigma_a_n << " m/s²\n";
-    std::cout << "  σ_ωw (gyro RW):" << params.sigma_omega_w << " rad/s√s\n";
-    std::cout << "  σ_aw (acc RW): " << params.sigma_a_w << " m/s²√s\n";
+    PRINT_INFO(BOLDWHITE "Timing:" RESET "\n")
+    PRINT_INFO(CYAN "  IMU rate:      %.1f Hz" RESET "\n", 1.0 / params.dt_imu)
+    PRINT_INFO(CYAN "  ESKF rate:     %.1f Hz" RESET "\n", 1.0 / params.dt_eskf)
+    PRINT_INFO(CYAN "  Image delay:   %.1f ms" RESET "\n", params.image_delay * 1000)
+    PRINT_INFO(CYAN "  Image timeout: %.1f s" RESET "\n", params.image_timeout_sec)
     
-    std::cout << "\nMeasurement Noise:\n";
-    std::cout << "  Image sigma:     " << params.sigma_img << "\n";
-    std::cout << "  Radar pos sigma: " << params.sigma_radar_pos << " m\n";
-    std::cout << "  Radar vel sigma: " << params.sigma_radar_vel << " m/s\n";
+    PRINT_INFO(BOLDWHITE "\nIMU Noise:" RESET "\n")
+    PRINT_INFO(CYAN "  sigma_omega_n: %.6f rad/s" RESET "\n", params.sigma_omega_n)
+    PRINT_INFO(CYAN "  sigma_a_n:     %.6f m/s\u00b2" RESET "\n", params.sigma_a_n)
+    PRINT_INFO(CYAN "  sigma_omega_w: %.6e rad/s\u221as" RESET "\n", params.sigma_omega_w)
+    PRINT_INFO(CYAN "  sigma_a_w:     %.6e m/s\u00b2\u221as" RESET "\n", params.sigma_a_w)
     
-    std::cout << "\nInitial Covariance (std dev):\n";
-    std::cout << "  Attitude: " << params.init_sigma_attitude << " rad\n";
-    std::cout << "  Position: " << params.init_sigma_position << " m\n";
-    std::cout << "  Velocity: " << params.init_sigma_velocity << " m/s\n";
-    std::cout << "  Pbar:     " << params.init_sigma_pbar << "\n";
-    std::cout << "  Gyro bias:" << params.init_sigma_bgyr << " rad/s\n";
-    std::cout << "  Acc bias: " << params.init_sigma_bacc << " m/s²\n";
+    PRINT_INFO(BOLDWHITE "\nMeasurement Noise:" RESET "\n")
+    PRINT_INFO(CYAN "  Image:     %.4f" RESET "\n", params.sigma_img)
+    PRINT_INFO(CYAN "  Radar pos: %.2f m" RESET "\n", params.sigma_radar_pos)
+    PRINT_INFO(CYAN "  Radar vel: %.2f m/s" RESET "\n", params.sigma_radar_vel)
     
-    std::cout << "\nHistory buffer: " << params.history_length << " entries\n";
+    PRINT_INFO(BOLDWHITE "\nInitial Covariance (1-sigma):" RESET "\n")
+    PRINT_INFO(CYAN "  Attitude:  %.4f rad" RESET "\n", params.init_sigma_attitude)
+    PRINT_INFO(CYAN "  Position:  %.2f m" RESET "\n", params.init_sigma_position)
+    PRINT_INFO(CYAN "  Velocity:  %.2f m/s" RESET "\n", params.init_sigma_velocity)
+    PRINT_INFO(CYAN "  Pbar:      %.4f" RESET "\n", params.init_sigma_pbar)
+    PRINT_INFO(CYAN "  Gyro bias: %.5f rad/s" RESET "\n", params.init_sigma_bgyr)
+    PRINT_INFO(CYAN "  Acc bias:  %.4f m/s\u00b2" RESET "\n", params.init_sigma_bacc)
     
-    std::cout << "\nZUPT Parameters:\n";
-    std::cout << "  Alpha:         " << params.zupt_alpha << "\n";
-    std::cout << "  Chi2 thresh:   " << params.chi2_threshold_zupt << " (6 DoF)\n";
-    std::cout << "=============================================\n\n";
+    PRINT_INFO(BOLDWHITE "\nHistory buffer: " RESET CYAN "%d entries" RESET "\n", params.history_length)
+    
+    PRINT_INFO(BOLDWHITE "\nChi-Square Gating:" RESET "\n")
+    PRINT_INFO(CYAN "  Image gating: %s" RESET "\n", params.enable_false_detection_image ? "enabled" : "disabled")
+    PRINT_INFO(CYAN "  Radar gating: %s" RESET "\n", params.enable_false_detection_radar ? "enabled" : "disabled")
+    PRINT_INFO(CYAN "  Image thresh: %.2f (2 DoF)" RESET "\n", params.chi2_threshold_image)
+    PRINT_INFO(CYAN "  Radar thresh: %.2f (6 DoF)" RESET "\n", params.chi2_threshold_radar)
+    
+    PRINT_INFO(BOLDWHITE "\nZUPT:" RESET "\n")
+    PRINT_INFO(CYAN "  Alpha:  %.2f" RESET "\n", params.zupt_alpha)
+    PRINT_INFO(CYAN "  Thresh: %.2f (6 DoF)" RESET "\n", params.chi2_threshold_zupt)
+    PRINT_INFO(BOLDCYAN "=============================================" RESET "\n\n")
 }
 
 } // namespace eskf
