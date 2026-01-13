@@ -50,10 +50,10 @@ def generate_launch_description():
         description='Output pose topic name'
     )
     
-    log_level_arg = DeclareLaunchArgument(
-        'log_level',
-        default_value='info',
-        description='Logging level (debug, info, warn, error, fatal)'
+    print_level_arg = DeclareLaunchArgument(
+        'print_level',
+        default_value='INFO',
+        description='ESKF Print level (ALL, DEBUG, INFO, WARNING, ERROR, SILENT)'
     )
     
     # ESKF Node
@@ -68,8 +68,8 @@ def generate_launch_description():
             'image_topic': LaunchConfiguration('image_topic'),
             'radar_topic': LaunchConfiguration('radar_topic'),
             'pose_topic': LaunchConfiguration('pose_topic'),
-        }],
-        arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')]
+            'print_level': LaunchConfiguration('print_level'),
+        }]
     )
     
     return LaunchDescription([
@@ -78,6 +78,6 @@ def generate_launch_description():
         image_topic_arg,
         radar_topic_arg,
         pose_topic_arg,
-        log_level_arg,
+        print_level_arg,
         eskf_node
     ])

@@ -83,3 +83,29 @@ zupt:
 safety:
   max_covariance_trace: 1000.0   # Reset filter if exceeded
   min_depth_z: 0.1               # Minimum camera depth [m]
+
+# Data Logging Configuration
+logging:
+  enable: true                   # Enable CSV logging of state and covariance
+  rate_hz: 200.0                  # Logging rate [Hz] (10-20 recommended)
+  file_path: "log/eskf_log.csv"  # Output file path (relative to package or absolute)
+
+# Magnetometer Configuration (NORMALIZED - using unit vectors)
+magnetometer:
+  enable: false                     # Enable/disable magnetometer correction
+  
+  # Reference magnetic field direction in NED frame (UNIT VECTOR)
+  # Original: [24.6238, 2.6146, 41.2869] μT → normalized by ||B|| ≈ 48.3 μT
+  # Location: ITU, Istanbul, Turkey
+  # Get values from: https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml
+  B_ned: [0.5115, 0.0543, 0.8576]
+  
+  # Noise parameters (dimensionless, scaled by ||B_ned|| ≈ 48.3 μT)
+  sigma_mag_n: 0.10               # Measurement noise (dimensionless, ~5μT/48μT)
+  sigma_mag_w: 0.0002             # Bias random walk [1/√s]
+  init_sigma_bmag: 1.0            # Initial bias uncertainty (dimensionless)
+  
+  # Chi-square gating
+  enable_false_detection: true     # Enable chi-square gating for magnetometer
+  chi2_threshold: 16.27            # 3 DoF, 99.99% confidence
+

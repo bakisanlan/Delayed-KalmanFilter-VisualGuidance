@@ -3,8 +3,8 @@
  * @brief Type definitions, state indices, and constants for ESKF
  * 
  * This file defines the core data structures for the Error-State Kalman Filter:
- * - Nominal state (18 dimensions): [q(4), pr(3), vr(3), pbar(2), bgyr(3), bacc(3)]
- * - Error state (17 dimensions): [δθ(3), δpr(3), δvr(3), δpbar(2), δbgyr(3), δbacc(3)]
+ * - Nominal state (21 dimensions): [q(4), pr(3), vr(3), pbar(2), bgyr(3), bacc(3), bmag(3)]
+ * - Error state (20 dimensions): [δθ(3), δpr(3), δvr(3), δpbar(2), δbgyr(3), δbacc(3), δbmag(3)]
  * 
  * Based on ESKF_Report.tex mathematical formulation.
  */
@@ -29,35 +29,40 @@ using Vector6d = Eigen::Matrix<double, 6, 1>;  // For radar [pr; vr]
 using Quaterniond = Eigen::Quaterniond;
 
 // State vectors
-using NominalState = Eigen::Matrix<double, 18, 1>;    ///< Nominal state x
-using ErrorState = Eigen::Matrix<double, 17, 1>;      ///< Error state δx
+using NominalState = Eigen::Matrix<double, 21, 1>;    ///< Nominal state x
+using ErrorState = Eigen::Matrix<double, 20, 1>;      ///< Error state δx
 
 // Covariance matrices
-using ErrorCovariance = Eigen::Matrix<double, 17, 17>;  ///< P matrix (17x17)
+using ErrorCovariance = Eigen::Matrix<double, 20, 20>;  ///< P matrix (20x20)
 
 // Jacobian matrices
-using StateJacobian = Eigen::Matrix<double, 17, 17>;    ///< Fc, Fd
-using NoiseJacobian = Eigen::Matrix<double, 17, 12>;    ///< Gc, Gd
-using ProcessNoise = Eigen::Matrix<double, 12, 12>;     ///< Qc, Qd
+using StateJacobian = Eigen::Matrix<double, 20, 20>;    ///< Fc, Fd
+using NoiseJacobian = Eigen::Matrix<double, 20, 15>;    ///< Gc, Gd
+using ProcessNoise = Eigen::Matrix<double, 15, 15>;     ///< Qc, Qd
 
 // Measurement matrices
 using ImageMeasurement = Vector2d;                       ///< pbar measurement
 using RadarMeasurement = Vector6d;                       ///< [pr; vr] measurement
-using ImageJacobian = Eigen::Matrix<double, 2, 17>;      ///< H_img
-using RadarJacobian = Eigen::Matrix<double, 6, 17>;      ///< H_radar (6x17)
+using ImageJacobian = Eigen::Matrix<double, 2, 20>;      ///< H_img
+using RadarJacobian = Eigen::Matrix<double, 6, 20>;      ///< H_radar (6x20)
 using ImageNoise = Eigen::Matrix2d;                      ///< R_img
 using RadarNoise = Eigen::Matrix<double, 6, 6>;          ///< R_radar (6x6)
 
 // ZUPT (Zero Velocity Update) matrices
 using ZUPTMeasurement = Vector6d;                        ///< [accel; gyro] residual
-using ZUPTJacobian = Eigen::Matrix<double, 6, 17>;       ///< H_zupt
+using ZUPTJacobian = Eigen::Matrix<double, 6, 20>;       ///< H_zupt
+
+// Magnetometer measurement matrices (NORMALIZED - dimensionless)
+using MagMeasurement = Vector3d;                         ///< Magnetometer measurement (unit vector)
+using MagJacobian = Eigen::Matrix<double, 3, 20>;        ///< H_mag (3x20)
+using MagNoise = Eigen::Matrix3d;                        ///< R_mag (3x3)
 using ZUPTNoise = Eigen::Matrix<double, 6, 6>;           ///< R_zupt
 
 // Rotation matrix
 using RotationMatrix = Eigen::Matrix3d;
 
 // ============================================================================
-// State Indices - Nominal State (18 dimensions)
+// State Indices - Nominal State (21 dimensions)
 // ============================================================================
 
 namespace nominal_idx {
@@ -85,12 +90,16 @@ namespace nominal_idx {
     constexpr int BACC_START = 15;
     constexpr int BACC_SIZE = 3;
     
+    // Magnetometer bias
+    constexpr int BMAG_START = 18;
+    constexpr int BMAG_SIZE = 3;
+    
     // Total nominal state size
-    constexpr int STATE_SIZE = 18;
+    constexpr int STATE_SIZE = 21;
 }
 
 // ============================================================================
-// State Indices - Error State (17 dimensions)
+// State Indices - Error State (20 dimensions)
 // ============================================================================
 
 namespace error_idx {
@@ -118,12 +127,16 @@ namespace error_idx {
     constexpr int DBACC_START = 14;
     constexpr int DBACC_SIZE = 3;
     
+    // Magnetometer bias error
+    constexpr int DBMAG_START = 17;
+    constexpr int DBMAG_SIZE = 3;
+    
     // Total error state size
-    constexpr int STATE_SIZE = 17;
+    constexpr int STATE_SIZE = 20;
 }
 
 // ============================================================================
-// Noise Vector Indices (12 dimensions)
+// Noise Vector Indices (15 dimensions)
 // ============================================================================
 
 namespace noise_idx {
@@ -143,8 +156,12 @@ namespace noise_idx {
     constexpr int A_W_START = 9;
     constexpr int A_W_SIZE = 3;
     
+    // Magnetometer bias random walk
+    constexpr int MAG_W_START = 12;
+    constexpr int MAG_W_SIZE = 3;
+    
     // Total noise vector size
-    constexpr int NOISE_SIZE = 12;
+    constexpr int NOISE_SIZE = 15;
 }
 
 // ============================================================================
@@ -256,6 +273,20 @@ struct ESKFParams {
     // ZUPT (Zero Velocity Update) parameters
     double zupt_alpha = 1.0;             ///< Noise inflation for ZUPT chi-square test
     double chi2_threshold_zupt = 12.59;   ///< 6 DoF, 95% confidence (chi2inv(0.95, 6))
+    
+    // Data Logging parameters
+    bool log_enabled = false;             ///< Enable CSV logging of state and covariance
+    double log_rate_hz = 20.0;            ///< Logging rate [Hz]
+    std::string log_file_path = "log/eskf_log.csv";  ///< Output file path
+    
+    // Magnetometer parameters (NORMALIZED - using unit vectors)
+    bool enable_mag = true;              ///< Enable/disable magnetometer correction
+    Vector3d B_ned = Vector3d(0.5097, 0.0541, 0.8545);  ///< Reference field direction in NED (unit vector)
+    double sigma_mag_n = 0.10;           ///< Mag measurement noise (dimensionless)
+    double sigma_mag_w = 0.0002;         ///< Mag bias random walk [1/√s]
+    double init_sigma_bmag = 1.0;        ///< Initial mag bias uncertainty (dimensionless)
+    bool enable_false_detection_mag = true;   ///< Enable chi-square gating for magnetometer
+    double chi2_threshold_mag = 16.27;   ///< 3 DoF, 99.99% confidence (chi2inv(0.9999, 3))
 };
 
 // ============================================================================
@@ -315,6 +346,13 @@ inline Vector3d getGyroBias(const NominalState& x) {
  */
 inline Vector3d getAccelBias(const NominalState& x) {
     return x.segment<3>(nominal_idx::BACC_START);
+}
+
+/**
+ * @brief Get magnetometer bias from nominal state
+ */
+inline Vector3d getMagBias(const NominalState& x) {
+    return x.segment<3>(nominal_idx::BMAG_START);
 }
 
 } // namespace state_access

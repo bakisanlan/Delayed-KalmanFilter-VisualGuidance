@@ -18,9 +18,17 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/magnetic_field.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+
+#include <fstream>
+#include <filesystem>
+#include <iomanip>
+#include <sstream>
+#include <chrono>
+#include <ctime>
 
 using namespace eskf;
 using namespace std::chrono_literals;
@@ -31,10 +39,16 @@ public:
         // Declare parameters
         this->declare_parameter("config_file", "");
         this->declare_parameter("imu_topic", "/mavros/imu/data_raw");
+        this->declare_parameter("mag_topic", "/mavros/imu/mag");
         this->declare_parameter("image_topic", "/yolo/target");
         this->declare_parameter("radar_topic", "/radar/pr");
         this->declare_parameter("odom_topic", "/eskf/odom");
         this->declare_parameter("pbar_topic", "/eskf/pbar");
+        this->declare_parameter("print_level", "INFO");  // ALL, DEBUG, INFO, WARNING, ERROR, SILENT
+        
+        // Set print level from parameter
+        std::string print_level = this->get_parameter("print_level").as_string();
+        Printer::setPrintLevel(print_level);
         
         // Load configuration
         std::string config_file = this->get_parameter("config_file").as_string();
@@ -53,6 +67,7 @@ public:
         
         // Setup subscribers
         std::string imu_topic = this->get_parameter("imu_topic").as_string();
+        std::string mag_topic = this->get_parameter("mag_topic").as_string();
         std::string image_topic = this->get_parameter("image_topic").as_string();
         std::string radar_topic = this->get_parameter("radar_topic").as_string();
         
@@ -62,6 +77,11 @@ public:
         imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
             imu_topic, imu_qos, 
             std::bind(&ESKFNode::imuCallback, this, std::placeholders::_1));
+        
+        // Magnetometer subscription (same QoS as IMU)
+        mag_sub_ = this->create_subscription<sensor_msgs::msg::MagneticField>(
+            mag_topic, imu_qos,
+            std::bind(&ESKFNode::magCallback, this, std::placeholders::_1));
         
         image_sub_ = this->create_subscription<geometry_msgs::msg::Point>(
             image_topic, 10,
@@ -93,7 +113,21 @@ public:
         PRINT_INFO(CYAN "  Samples/update: %d" RESET "\n", samples_per_eskf_)
         PRINT_INFO(CYAN "  Image delay:    %d steps" RESET "\n", delay_steps_)
         PRINT_INFO(CYAN "  Image timeout:  %.1f s" RESET "\n", params_.image_timeout_sec)
+        
+        // Initialize logging if enabled
+        if (params_.log_enabled) {
+            initializeLogging();
+        }
+        
         PRINT_WARNING(YELLOW "[ESKF]: Waiting for first radar measurement..." RESET "\n")
+    }
+    
+    ~ESKFNode() {
+        // Close log file if open
+        if (log_file_.is_open()) {
+            log_file_.close();
+            PRINT_INFO(GREEN "[LOG]: File closed" RESET "\n")
+        }
     }
 
 private:
@@ -223,6 +257,49 @@ private:
                     innovation(3), innovation(4), innovation(5))
     }
     
+    void magCallback(const sensor_msgs::msg::MagneticField::SharedPtr msg) {
+        // Skip if magnetometer is disabled
+        if (!params_.enable_mag) {
+            return;
+        }
+        
+        if (!first_mag_received_) {
+            first_mag_received_ = true;
+            double mag_uT = std::sqrt(msg->magnetic_field.x * msg->magnetic_field.x +
+                                      msg->magnetic_field.y * msg->magnetic_field.y +
+                                      msg->magnetic_field.z * msg->magnetic_field.z) * 1e-3;
+            PRINT_INFO(GREEN "[MAG]: First message - magnitude %.2f \u03bcT (normalized for ESKF)" RESET "\n", mag_uT)
+        }
+        
+        if (!is_initialized_) {
+            return;
+        }
+        
+        // Convert FLU (MAVROS) to FRD (ESKF): x stays, negate y and z
+        Vector3d z_mag_raw(
+             msg->magnetic_field.x,
+            -msg->magnetic_field.y,
+            -msg->magnetic_field.z
+        );
+        
+        // Normalize to unit vector (magnitude-independent)
+        double mag_norm = z_mag_raw.norm();
+        if (mag_norm < 1e-6) {
+            return;  // Invalid measurement
+        }
+        Vector3d z_mag = z_mag_raw / mag_norm;  // Unit vector
+        
+        Vector3d innovation = eskf_->correctMag(z_mag);
+        
+        static int mag_log_counter = 0;
+        if (++mag_log_counter % 100 == 0 && innovation.norm() > 0) {
+            Vector3d bmag = eskf_->getMagBias();
+            PRINT_DEBUG(MAGENTA "[MAG]: Innovation=[%.4f,%.4f,%.4f], bias=[%.4f,%.4f,%.4f]" RESET "\n",
+                       innovation(0), innovation(1), innovation(2),
+                       bmag(0), bmag(1), bmag(2))
+        }
+    }
+    
     void initializeFilter(const Vector6d& z_radar) {
         PRINT_INFO(BOLDGREEN "\n========== ESKF INITIALIZATION ==========" RESET "\n")
         PRINT_INFO(CYAN "[RADAR]: First measurement received" RESET "\n")
@@ -241,6 +318,7 @@ private:
         x_init.segment<2>(nominal_idx::PBAR_START).setZero();
         x_init.segment<3>(nominal_idx::BGYR_START).setZero();
         x_init.segment<3>(nominal_idx::BACC_START).setZero();
+        x_init.segment<3>(nominal_idx::BMAG_START).setZero();  // Initialize mag bias to zero
         
         eskf_->reset(x_init, eskf_->getCovariance());
         is_initialized_ = true;
@@ -302,9 +380,11 @@ private:
         Vector3d pos = eskf_->getPosition();
         Vector3d vel = eskf_->getVelocity();
         Vector2d pbar = eskf_->getPbar();
+        Vector3d bgyr = eskf_->getGyroBias();
+        Vector3d bacc = eskf_->getAccelBias();
+        Vector3d bmag = eskf_->getMagBias();
         auto cov_diag = eskf_->getCovarianceDiagonal();
         
-        // === Publish Odometry (pose + velocity) ===
         auto odom_msg = nav_msgs::msg::Odometry();
         odom_msg.header.stamp = stamp;
         odom_msg.header.frame_id = "world";
@@ -350,6 +430,41 @@ private:
         pbar_msg.z = 0.0;  // 2D state
         
         pbar_pub_->publish(pbar_msg);
+        
+        // === CSV Logging (rate-limited) ===
+        if (log_file_.is_open()) {
+            log_skip_counter_++;
+            if (log_skip_counter_ >= log_skip_samples_) {
+                log_skip_counter_ = 0;
+                
+                double timestamp = stamp.seconds();
+                Vector3d euler_rad = q.toRotationMatrix().eulerAngles(2, 1, 0);  // ZYX order
+                Vector3d euler_deg = euler_rad * 180.0 / M_PI;
+                for (int i = 0; i < 3; ++i) {
+                    if (euler_deg(i) > 180.0) euler_deg(i) -= 360.0;
+                    if (euler_deg(i) < -180.0) euler_deg(i) += 360.0;
+                }
+                
+                // Write: timestamp, roll, pitch, yaw, x, y, z, vx, vy, vz, pbar_x, pbar_y,
+                //        bgyr (3), bacc (3), bmag (3), P_dtheta (3), P_dpos (3), P_dvel (3), P_dpbar (2), P_dbgyr (3), P_dbacc (3), P_dbmag (3)
+                                
+                log_file_ << std::fixed << std::setprecision(6)
+                          << timestamp << ","
+                          << euler_deg(0) << "," << euler_deg(1) << "," << euler_deg(2) << ","
+                          << pos(0) << "," << pos(1) << "," << pos(2) << ","
+                          << vel(0) << "," << vel(1) << "," << vel(2) << ","
+                          << pbar(0) << "," << pbar(1) << ","
+                          << bgyr(0) << "," << bgyr(1) << "," << bgyr(2) << ","
+                          << bacc(0) << "," << bacc(1) << "," << bacc(2) << ","
+                          << bmag(0) << "," << bmag(1) << "," << bmag(2);
+                
+                // Covariance diagonal (all 20 error states)
+                for (int i = 0; i < 20; ++i) {
+                    log_file_ << "," << cov_diag(i);
+                }
+                log_file_ << "\n";  // No flush for performance
+            }
+        }
     }
     
     void diagnosticsCallback() {
@@ -407,6 +522,7 @@ private:
     std::unique_ptr<ErrorStateKalmanFilter> eskf_;
     
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr mag_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr image_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr radar_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
@@ -418,9 +534,60 @@ private:
     int samples_per_eskf_ = 1;
     int delay_steps_ = 0;
     bool first_imu_received_ = false;
+    bool first_mag_received_ = false;
     bool first_image_received_ = false;
     double last_image_time_ = 0.0;
     int prediction_count_ = 0;  // Counter for Hz measurement
+    
+    // CSV Logging
+    std::ofstream log_file_;
+    int log_skip_counter_ = 0;
+    int log_skip_samples_ = 1;  // Computed from rate
+    
+    void initializeLogging() {
+        // Compute skip samples: eskf_rate / log_rate
+        double eskf_rate = 1.0 / params_.dt_eskf;
+        log_skip_samples_ = std::max(1, static_cast<int>(std::round(eskf_rate / params_.log_rate_hz)));
+        
+        // Generate timestamp-based filename
+        auto now = std::chrono::system_clock::now();
+        auto time_t_now = std::chrono::system_clock::to_time_t(now);
+        std::tm* tm_now = std::localtime(&time_t_now);
+        
+        std::ostringstream filename_ss;
+        filename_ss << "/home/ituarc/ros2_ws/src/eskf_cpp/log/eskf_" 
+                    << std::put_time(tm_now, "%Y%m%d_%H%M%S")
+                    << ".csv";
+        std::string log_filename = filename_ss.str();
+        
+        // Create directory if it doesn't exist (under package directory)
+        std::filesystem::path log_path(log_filename);
+        if (log_path.has_parent_path()) {
+            std::filesystem::create_directories(log_path.parent_path());
+        }
+        
+        // Open file
+        log_file_.open(log_filename);
+        if (!log_file_.is_open()) {
+            PRINT_ERROR(RED "[LOG]: Failed to open %s" RESET "\n", log_filename.c_str())
+            return;
+        }
+        
+        // Write CSV header
+        log_file_ << "timestamp,roll_deg,pitch_deg,yaw_deg,x,y,z,vx,vy,vz,pbar_x,pbar_y,"
+                  << "bgyr_x,bgyr_y,bgyr_z,bacc_x,bacc_y,bacc_z,bmag_x,bmag_y,bmag_z,"
+                  << "P_dtheta_x,P_dtheta_y,P_dtheta_z,"
+                  << "P_dpos_x,P_dpos_y,P_dpos_z,"
+                  << "P_dvel_x,P_dvel_y,P_dvel_z,"
+                  << "P_dpbar_x,P_dpbar_y,"
+                  << "P_dbgyr_x,P_dbgyr_y,P_dbgyr_z,"
+                  << "P_dbacc_x,P_dbacc_y,P_dbacc_z,"
+                  << "P_dbmag_x,P_dbmag_y,P_dbmag_z\n";
+        
+        double actual_log_rate = eskf_rate / log_skip_samples_;
+        PRINT_INFO(GREEN "[LOG]: Logging to %s @ %.1f Hz" RESET "\n",
+                   log_filename.c_str(), actual_log_rate)
+    }
     
     struct IMUSample {
         Vector3d omega;

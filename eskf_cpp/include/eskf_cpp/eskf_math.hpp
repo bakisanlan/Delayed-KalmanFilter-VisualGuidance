@@ -255,16 +255,17 @@ inline Vector2d computeApcz(double pbar_x, double pbar_y,
 // ============================================================================
 
 /**
- * @brief Compute discrete process noise covariance Qd (12x12)
+ * @brief Compute discrete process noise covariance Qd (15x15)
  * 
  * Following paper notation:
  *   Θ_i = σ²_ωn * Δt² * I₃  [rad²]       - attitude noise
  *   V_i = σ²_an * Δt² * I₃  [m²/s²]      - velocity noise
  *   Ω_i = σ²_ωw * Δt * I₃   [rad²/s²]    - gyro bias RW
  *   A_i = σ²_aw * Δt * I₃   [m²/s⁴]      - accel bias RW
+ *   M_i = σ²_mw * Δt * I₃   [nT²]        - mag bias RW
  * 
  * @param params ESKF parameters containing noise values
- * @return 12x12 block diagonal process noise covariance
+ * @return 15x15 block diagonal process noise covariance
  */
 inline ProcessNoise computeDiscreteProcessNoise(const ESKFParams& params) {
     const double dt = params.dt_eskf;
@@ -290,6 +291,11 @@ inline ProcessNoise computeDiscreteProcessNoise(const ESKFParams& params) {
     const double a_i = params.sigma_a_w * params.sigma_a_w * dt;
     Qd.block<3,3>(noise_idx::A_W_START, noise_idx::A_W_START) = 
         a_i * Eigen::Matrix3d::Identity();
+    
+    // M_i: Mag bias random walk covariance (indices 12-14)
+    const double m_i = params.sigma_mag_w * params.sigma_mag_w * dt;
+    Qd.block<3,3>(noise_idx::MAG_W_START, noise_idx::MAG_W_START) = 
+        m_i * Eigen::Matrix3d::Identity();
     
     return Qd;
 }

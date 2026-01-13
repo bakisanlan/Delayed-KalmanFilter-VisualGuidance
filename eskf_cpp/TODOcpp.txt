@@ -5,9 +5,7 @@ TODO:
     -convert flu frame to frd frame for mavros IMU(done)
     
 
-    -Fix divergence issue after camera pbar measurement(done)
+    -Fix divergence issue after camera pbar measurement
     -Add magnetometer measurements
-    -Make terminal logging better(done)
-    -Save ESKF estimation output
     
     

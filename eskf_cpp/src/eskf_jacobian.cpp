@@ -68,7 +68,7 @@ ESKFJacobians computeESKFJacobians(
     const Vector2d A_pc_z = computeApcz(pbar_x, pbar_y, v_c, p_c_z);
     
     // ========================================================================
-    // Build Continuous-Time Fc Matrix (17x17)
+    // Build Continuous-Time Fc Matrix (20x20)
     // ========================================================================
     jac.Fc.setZero();
     
@@ -132,9 +132,9 @@ ESKFJacobians computeESKFJacobians(
     // (already zero from setZero)
     
     // ========================================================================
-    // Build Continuous-Time Gc Matrix (17x12)
+    // Build Continuous-Time Gc Matrix (20x15)
     // ========================================================================
-    // Noise vector: n = [n_ω(3), n_a(3), ω_w(3), a_w(3)]
+    // Noise vector: n = [n_ω(3), n_a(3), ω_w(3), a_w(3), m_w(3)]
     
     jac.Gc.setZero();
     
@@ -158,13 +158,17 @@ ESKFJacobians computeESKFJacobians(
     jac.Gc.block<3,3>(error_idx::DBACC_START, noise_idx::A_W_START) = 
         Eigen::Matrix3d::Identity();
     
+    // δbmag_dot affected by mag bias random walk
+    jac.Gc.block<3,3>(error_idx::DBMAG_START, noise_idx::MAG_W_START) = 
+        Eigen::Matrix3d::Identity();
+    
     // ========================================================================
     // Discretization
     // ========================================================================
     // First-order approximation: Fd ≈ I + Fc*dt, Gd ≈ Gc*dt
     // With exact exponential for attitude block
     
-    // --- Fd (17x17) ---
+    // --- Fd (20x20) ---
     jac.Fd = StateJacobian::Identity() + jac.Fc * dt;
     
     // Exact discretization for attitude: exp(-skew(omega)*dt)
@@ -176,7 +180,7 @@ ESKFJacobians computeESKFJacobians(
     jac.Fd.block<3,3>(error_idx::DTHETA_START, error_idx::DBGYR_START) = 
         -Eigen::Matrix3d::Identity() * dt;
     
-    // --- Gd (17x12) ---
+    // --- Gd (20x15) ---
     jac.Gd = jac.Gc * dt;
     
     return jac;
@@ -209,6 +213,41 @@ ZUPTJacobian computeZUPTJacobian(const NominalState& x_nominal) {
     
     // === Row 3-5 (Gyroscope): H2 = [0₃  0₃  0₃  0₂  -I₃  0₃] ===
     H.block<3,3>(3, error_idx::DBGYR_START) = -Eigen::Matrix3d::Identity();
+    
+    return H;
+}
+
+// ============================================================================
+// Magnetometer Jacobian
+// ============================================================================
+
+MagJacobian computeMagJacobian(const NominalState& x_nominal, const Vector3d& B_ned) {
+    using namespace state_access;
+    using namespace math;
+    
+    MagJacobian H;
+    H.setZero();
+    
+    // Get current attitude
+    const Quaterniond q = getQuaternion(x_nominal);
+    const RotationMatrix R_b2e = quaternionToRotation(q);
+    const RotationMatrix R_e2b = R_b2e.transpose();
+    
+    // Magnetic field in body frame
+    const Vector3d B_body = R_e2b * B_ned;
+    
+    // === dh/dδθ = skew(R_e2b * B_ned) ===
+    // Linearization: R_true' = (I - skew(δθ)) * R_nom'
+    // So: R_true' * B = R_nom' * B - skew(δθ) * R_nom' * B
+    //                 = B_body - skew(δθ) * B_body
+    //                 = B_body + skew(B_body) * δθ
+    // Therefore dh/dδθ = skew(B_body)
+    H.block<3,3>(0, error_idx::DTHETA_START) = skew(B_body);
+    
+    // === dh/dδbmag = -I₃ ===
+    // Measurement model: z = R_e2b * B_ned - b_mag
+    // So dh/db_mag = -I
+    H.block<3,3>(0, error_idx::DBMAG_START) = -Eigen::Matrix3d::Identity();
     
     return H;
 }

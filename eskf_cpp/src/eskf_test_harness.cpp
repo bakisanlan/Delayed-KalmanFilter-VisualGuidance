@@ -260,23 +260,26 @@ int main(int argc, char** argv) {
     // CSV output
     std::ofstream csv_file("cpp_results.csv");
     csv_file << "time,"
-             // Estimated State (18)
+             // Estimated State (21)
              << "px_est,py_est,pz_est,vx_est,vy_est,vz_est,"
              << "qw_est,qx_est,qy_est,qz_est,"
              << "pbarx_est,pbary_est,"
              << "bgx_est,bgy_est,bgz_est,bax_est,bay_est,baz_est,"
-             // True State (18)
+             << "bmx_est,bmy_est,bmz_est,"
+             // True State (21)
              << "px_true,py_true,pz_true,vx_true,vy_true,vz_true,"
              << "qw_true,qx_true,qy_true,qz_true,"
              << "pbarx_true,pbary_true,"
              << "bgx_true,bgy_true,bgz_true,bax_true,bay_true,baz_true,"
-             // Covariance Diagonal (17)
+             << "bmx_true,bmy_true,bmz_true,"
+             // Covariance Diagonal (20)
              << "P_dtheta_x,P_dtheta_y,P_dtheta_z,"
              << "P_dpr_x,P_dpr_y,P_dpr_z,"
              << "P_dvr_x,P_dvr_y,P_dvr_z,"
              << "P_dpbar_x,P_dpbar_y,"
              << "P_dbgyr_x,P_dbgyr_y,P_dbgyr_z,"
-             << "P_dbacc_x,P_dbacc_y,P_dbacc_z\n";
+             << "P_dbacc_x,P_dbacc_y,P_dbacc_z,"
+             << "P_dbmag_x,P_dbmag_y,P_dbmag_z\n";
     
     std::cout << "Starting simulation...\n";
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -388,9 +391,11 @@ int main(int argc, char** argv) {
         // Write to CSV (every sample to match MATLAB plot resolution, or maybe every 10th if too large)
         if (k % 10 == 0) {
             Vector2d pbar_est = eskf.getPbar();
+            Vector3d bmag_est = eskf.getMagBias();
             Vector3d bg_true = imu_sim.getGyroBias();
             Vector3d ba_true = imu_sim.getAccelBias();
-            Eigen::Matrix<double, 17, 1> P_diag = eskf.getCovarianceDiagonal();
+            Vector3d bm_true = Vector3d::Zero();  // No true mag bias in sim
+            Eigen::Matrix<double, 20, 1> P_diag = eskf.getCovarianceDiagonal();
             
             csv_file << std::fixed << std::setprecision(6)
                      << t << ","
@@ -401,16 +406,18 @@ int main(int argc, char** argv) {
                      << pbar_est(0) << "," << pbar_est(1) << ","
                      << bgyr_est(0) << "," << bgyr_est(1) << "," << bgyr_est(2) << ","
                      << bacc_est(0) << "," << bacc_est(1) << "," << bacc_est(2) << ","
+                     << bmag_est(0) << "," << bmag_est(1) << "," << bmag_est(2) << ","
                      // True
                      << p_r_true(0) << "," << p_r_true(1) << "," << p_r_true(2) << ","
                      << v_r_true(0) << "," << v_r_true(1) << "," << v_r_true(2) << ","
                      << truth.q.w() << "," << truth.q.x() << "," << truth.q.y() << "," << truth.q.z() << ","
                      << pbar_true(0) << "," << pbar_true(1) << ","
                      << bg_true(0) << "," << bg_true(1) << "," << bg_true(2) << ","
-                     << ba_true(0) << "," << ba_true(1) << "," << ba_true(2);
+                     << ba_true(0) << "," << ba_true(1) << "," << ba_true(2) << ","
+                     << bm_true(0) << "," << bm_true(1) << "," << bm_true(2);
             
-            // Covariance
-            for (int i = 0; i < 17; ++i) {
+            // Covariance (20 elements)
+            for (int i = 0; i < 20; ++i) {
                 csv_file << "," << P_diag(i);
             }
             csv_file << "\n";

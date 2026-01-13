@@ -125,6 +125,17 @@ public:
      */
     Vector6d correctRadar(const Vector6d& z_radar);
     
+    /**
+     * @brief Correction with magnetometer measurement
+     * 
+     * Magnetometer measurement model:
+     *   z_mag = R_e2b * B_ned - b_mag - noise
+     * 
+     * @param z_mag Measured magnetic field in body frame [nT]
+     * @return Innovation vector (for diagnostics), empty if rejected
+     */
+    Vector3d correctMag(const Vector3d& z_mag);
+    
     // ========================================================================
     // Zero Velocity Update (ZUPT)
     // ========================================================================
@@ -226,9 +237,10 @@ public:
     Vector2d getPbar() const { return state_access::getPbar(x_); }
     Vector3d getGyroBias() const { return state_access::getGyroBias(x_); }
     Vector3d getAccelBias() const { return state_access::getAccelBias(x_); }
+    Vector3d getMagBias() const { return state_access::getMagBias(x_); }
     
     /** @brief Get covariance diagonal for monitoring */
-    Eigen::Matrix<double, 17, 1> getCovarianceDiagonal() const { return P_.diagonal(); }
+    Eigen::Matrix<double, 20, 1> getCovarianceDiagonal() const { return P_.diagonal(); }
 
 private:
     // ========================================================================
@@ -326,7 +338,8 @@ private:
     
     // Measurement noise covariances
     ImageNoise R_img_;               ///< Image noise (2x2)
-    RadarNoise R_radar_;             ///< Radar noise (3x3)
+    RadarNoise R_radar_;             ///< Radar noise (6x6)
+    MagNoise R_mag_;                 ///< Magnetometer noise (3x3)
     
     // Fixed measurement matrices
     ImageJacobian H_img_;            ///< Image measurement Jacobian (2x17)

@@ -49,6 +49,9 @@ ErrorStateKalmanFilter::ErrorStateKalmanFilter(const ESKFParams& params)
     R_zupt_.block<3,3>(0, 0) = params_.sigma_a_n * params_.sigma_a_n * Eigen::Matrix3d::Identity();
     R_zupt_.block<3,3>(3, 3) = params_.sigma_omega_n * params_.sigma_omega_n * Eigen::Matrix3d::Identity();
     
+    // Magnetometer measurement noise
+    R_mag_ = params_.sigma_mag_n * params_.sigma_mag_n * MagNoise::Identity();
+    
     // Initialize error covariance
     P_ = createInitialCovariance();
     
@@ -136,13 +139,16 @@ void ErrorStateKalmanFilter::predict(const Vector3d& omega_meas,
     // This prevents pbar covariance from exploding when unobserved
     if (!first_image_received_ || pbar_frozen_) {
         // Zero off-diagonal correlations between pbar and other states
-        // Rows 9-10 (pbar), columns 0-8 and 11-16
-        P_new.block<2,9>(error_idx::DPBAR_START, 0).setZero();  // pbar row, before pbar
-        P_new.block<2,6>(error_idx::DPBAR_START, error_idx::DPBAR_START + 2).setZero();  // pbar row, after pbar
+        // Error state is 20D: [δθ(3), δp(3), δv(3), δpbar(2), δbgyr(3), δbacc(3), δbmag(3)]
+        // pbar is at indices 9-10
         
-        // Columns 9-10 (pbar), rows 0-8 and 13-16
+        // Rows 9-10 (pbar): zero columns 0-8 (before pbar) and 11-19 (after pbar)
+        P_new.block<2,9>(error_idx::DPBAR_START, 0).setZero();  // pbar row, before pbar
+        P_new.block<2,9>(error_idx::DPBAR_START, error_idx::DPBAR_START + 2).setZero();  // pbar row, after pbar (bgyr+bacc+bmag=9)
+        
+        // Columns 9-10 (pbar): zero rows 0-8 and 11-19
         P_new.block<9,2>(0, error_idx::DPBAR_START).setZero();  // before pbar, pbar col
-        P_new.block<6,2>(error_idx::DPBAR_START + 2, error_idx::DPBAR_START).setZero();  // after pbar, pbar col
+        P_new.block<9,2>(error_idx::DPBAR_START + 2, error_idx::DPBAR_START).setZero();  // after pbar (bgyr+bacc+bmag=9), pbar col
         
         // Restore pbar diagonal covariance to its initial/previous value
         P_new.block<2,2>(error_idx::DPBAR_START, error_idx::DPBAR_START) = 
@@ -179,6 +185,7 @@ NominalState ErrorStateKalmanFilter::predictNominalState(
     const Vector2d pbar = state_access::getPbar(x);
     const Vector3d b_gyr = state_access::getGyroBias(x);
     const Vector3d b_acc = state_access::getAccelBias(x);
+    const Vector3d b_mag = state_access::getMagBias(x);
     
     // Corrected IMU measurements
     const Vector3d omega = omega_meas - b_gyr;
@@ -220,6 +227,7 @@ NominalState ErrorStateKalmanFilter::predictNominalState(
     // === Biases don't change in nominal propagation ===
     const Vector3d b_gyr_new = b_gyr;
     const Vector3d b_acc_new = b_acc;
+    const Vector3d b_mag_new = b_mag;
     
     // Assemble new state
     NominalState x_new;
@@ -229,6 +237,7 @@ NominalState ErrorStateKalmanFilter::predictNominalState(
     x_new.segment<2>(nominal_idx::PBAR_START) = pbar_new;
     x_new.segment<3>(nominal_idx::BGYR_START) = b_gyr_new;
     x_new.segment<3>(nominal_idx::BACC_START) = b_acc_new;
+    x_new.segment<3>(nominal_idx::BMAG_START) = b_mag_new;  // Propagate mag bias unchanged
     
     return x_new;
 }
@@ -258,7 +267,7 @@ Vector2d ErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
     innovation = z_pbar - z_pred;
     
     // Innovation covariance
-    const Eigen::Matrix<double, 17, 2> PH_T = P_prior * H_img_.transpose();
+    const Eigen::Matrix<double, 20, 2> PH_T = P_prior * H_img_.transpose();
     const Eigen::Matrix2d S = H_img_ * PH_T + R_img_;
     
     // === Mahalanobis Distance Chi-Square Gating ===
@@ -272,7 +281,7 @@ Vector2d ErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
     }
     
     // Kalman gain
-    const Eigen::Matrix<double, 17, 2> K = PH_T * S.inverse();
+    const Eigen::Matrix<double, 20, 2> K = PH_T * S.inverse();
     
     // Error state correction
     const ErrorState delta_x = K * innovation;
@@ -314,7 +323,7 @@ Vector6d ErrorStateKalmanFilter::correctRadar(const Vector6d& z_radar) {
     const Vector6d innovation = z_radar - z_pred;
     
     // Innovation covariance
-    const Eigen::Matrix<double, 17, 6> PH_T = P_ * H_radar_.transpose();
+    const Eigen::Matrix<double, 20, 6> PH_T = P_ * H_radar_.transpose();
     const Eigen::Matrix<double, 6, 6> S = H_radar_ * PH_T + R_radar_;
     
     // === Mahalanobis Distance Chi-Square Gating ===
@@ -328,7 +337,7 @@ Vector6d ErrorStateKalmanFilter::correctRadar(const Vector6d& z_radar) {
     }
     
     // Kalman gain
-    const Eigen::Matrix<double, 17, 6> K = PH_T * S.inverse();
+    const Eigen::Matrix<double, 20, 6> K = PH_T * S.inverse();
     
     // Error state correction
     const ErrorState delta_x = K * innovation;
@@ -340,6 +349,59 @@ Vector6d ErrorStateKalmanFilter::correctRadar(const Vector6d& z_radar) {
     const StateJacobian I_KH = StateJacobian::Identity() - K * H_radar_;
     ErrorCovariance P_updated = I_KH * P_ * I_KH.transpose() 
                                + K * R_radar_ * K.transpose();
+    
+    // ESKF reset
+    P_ = resetCovariance(P_updated, delta_x);
+    
+    return innovation;
+}
+
+// ============================================================================
+// Magnetometer Correction (NORMALIZED - unit vectors, dimensionless)
+// ============================================================================
+
+Vector3d ErrorStateKalmanFilter::correctMag(const Vector3d& z_mag) {
+    // z_mag should be a unit vector (normalized by caller)
+    // B_ned should also be a unit vector (from config)
+    
+    // Compute attitude-dependent Jacobian
+    const MagJacobian H_mag = computeMagJacobian(x_, params_.B_ned);
+    
+    // Predicted measurement: R_e2b * B_ned - b_mag (all dimensionless)
+    const RotationMatrix R_b2e = math::quaternionToRotation(getQuaternion());
+    const RotationMatrix R_e2b = R_b2e.transpose();
+    const Vector3d z_pred = R_e2b * params_.B_ned - getMagBias();
+    
+    // Innovation
+    const Vector3d innovation = z_mag - z_pred;
+    
+    // Innovation covariance
+    const Eigen::Matrix<double, 20, 3> PH_T = P_ * H_mag.transpose();
+    const MagNoise S = H_mag * PH_T + R_mag_;
+    
+    // === Mahalanobis Distance Chi-Square Gating ===
+    // d² = y' * S^(-1) * y follows chi-square with 3 DoF
+    const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
+    
+    if (params_.enable_false_detection_mag && d_mahal_sq > params_.chi2_threshold_mag) {
+        PRINT_WARNING(YELLOW "[MAG]: False detection rejected (Mahalanobis d²=%.2f > %.2f)" RESET "\n",
+                    d_mahal_sq, params_.chi2_threshold_mag)
+        return Vector3d::Zero();
+    }
+    
+    // Kalman gain
+    const Eigen::Matrix<double, 20, 3> K = PH_T * S.inverse();
+    
+    // Error state correction
+    const ErrorState delta_x = K * innovation;
+    
+    // Inject error into nominal state
+    x_ = injectErrorState(x_, delta_x);
+    
+    // Covariance update (Joseph form)
+    const StateJacobian I_KH = StateJacobian::Identity() - K * H_mag;
+    ErrorCovariance P_updated = I_KH * P_ * I_KH.transpose() 
+                               + K * R_mag_ * K.transpose();
     
     // ESKF reset
     P_ = resetCovariance(P_updated, delta_x);
@@ -406,11 +468,11 @@ Vector6d ErrorStateKalmanFilter::correctZUPT(const Vector3d& omega_meas,
     const ZUPTJacobian H = computeZUPTJacobian(x_);
     
     // Innovation covariance (use non-inflated noise for update)
-    const Eigen::Matrix<double, 17, 6> PH_T = P_ * H.transpose();
+    const Eigen::Matrix<double, 20, 6> PH_T = P_ * H.transpose();
     const ZUPTNoise S = H * PH_T + R_zupt_;
     
     // Kalman gain
-    const Eigen::Matrix<double, 17, 6> K = PH_T * S.inverse();
+    const Eigen::Matrix<double, 20, 6> K = PH_T * S.inverse();
     
     // Error state correction
     const ErrorState delta_x = K * innovation;
@@ -477,6 +539,8 @@ NominalState ErrorStateKalmanFilter::injectErrorState(
         delta_x.segment<3>(error_idx::DBGYR_START);
     x_corrected.segment<3>(nominal_idx::BACC_START) += 
         delta_x.segment<3>(error_idx::DBACC_START);
+    x_corrected.segment<3>(nominal_idx::BMAG_START) += 
+        delta_x.segment<3>(error_idx::DBMAG_START);
     
     return x_corrected;
 }
@@ -598,6 +662,10 @@ ErrorCovariance ErrorStateKalmanFilter::createInitialCovariance() const {
     // δbacc - accel bias
     P.block<3,3>(error_idx::DBACC_START, error_idx::DBACC_START) = 
         params_.init_sigma_bacc * params_.init_sigma_bacc * Eigen::Matrix3d::Identity();
+    
+    // δbmag - mag bias
+    P.block<3,3>(error_idx::DBMAG_START, error_idx::DBMAG_START) = 
+        params_.init_sigma_bmag * params_.init_sigma_bmag * Eigen::Matrix3d::Identity();
     
     return P;
 }
