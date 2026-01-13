@@ -5,7 +5,8 @@ TODO:
     -convert flu frame to frd frame for mavros IMU(done)
     
 
-    -Fix divergence issue after camera pbar measurement
-    -Add magnetometer measurements
+    -Fix divergence issue after camera pbar measurement(done)
+    -Add magnetometer measurements(done, need bug fix, currently filter tends to diverge when mag correct open)
+    
     
     
