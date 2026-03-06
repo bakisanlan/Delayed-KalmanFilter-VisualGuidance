@@ -1,3 +1,4 @@
 /eskf_cpp/.vs
 /eskf_cpp/build
 /eskf_cpp/out
+*.pyc
