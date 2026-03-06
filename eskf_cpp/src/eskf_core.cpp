@@ -32,6 +32,9 @@ ErrorStateKalmanFilter::ErrorStateKalmanFilter(const ESKFParams& params)
     // Compute discrete process noise
     Qd_ = math::computeDiscreteProcessNoise(params_);
     
+    // Initialize gravity vector from config parameter
+    gravity_ned_ = Vector3d(0.0, 0.0, params_.gravity);
+    
     // Setup measurement noise covariances
     R_img_ = params_.sigma_img * params_.sigma_img * Eigen::Matrix2d::Identity();
     
@@ -201,7 +204,7 @@ NominalState ErrorStateKalmanFilter::predictNominalState(
     q_new = normalizeQuaternion(q_new);
     
     // === Velocity update ===
-    const Vector3d a_world = R_b2e * a_body + constants::GRAVITY_NED;
+    const Vector3d a_world = R_b2e * a_body + gravity_ned_;
     const Vector3d v_r_new = v_r + a_world * dt;
     
     // === Position update (trapezoidal) ===
@@ -314,46 +317,100 @@ Vector2d ErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
 // ============================================================================
 
 Vector6d ErrorStateKalmanFilter::correctRadar(const Vector6d& z_radar) {
-    // Predicted measurement [p_r; v_r] from state
-    Vector6d z_pred;
-    z_pred.head<3>() = state_access::getPosition(x_);
-    z_pred.tail<3>() = state_access::getVelocity(x_);
-    
-    // Innovation
-    const Vector6d innovation = z_radar - z_pred;
-    
-    // Innovation covariance
-    const Eigen::Matrix<double, 20, 6> PH_T = P_ * H_radar_.transpose();
-    const Eigen::Matrix<double, 6, 6> S = H_radar_ * PH_T + R_radar_;
-    
-    // === Mahalanobis Distance Chi-Square Gating ===
-    // d² = y' * S^(-1) * y follows chi-square with 6 DoF
-    const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
-    
-    if (params_.enable_false_detection_radar && d_mahal_sq > params_.chi2_threshold_radar) {
-        PRINT_WARNING(YELLOW "[RADAR]: False detection rejected (Mahalanobis d²=%.2f > %.2f)" RESET "\n",
-                    d_mahal_sq, params_.chi2_threshold_radar)
-        return Vector6d::Zero();
+    // Check if we should use velocity measurements
+    if (params_.use_vr) {
+        // === Full 6D update (position + velocity) ===
+        // Predicted measurement [p_r; v_r] from state
+        Vector6d z_pred;
+        z_pred.head<3>() = state_access::getPosition(x_);
+        z_pred.tail<3>() = state_access::getVelocity(x_);
+        
+        // Innovation
+        const Vector6d innovation = z_radar - z_pred;
+        
+        // Innovation covariance
+        const Eigen::Matrix<double, 20, 6> PH_T = P_ * H_radar_.transpose();
+        const Eigen::Matrix<double, 6, 6> S = H_radar_ * PH_T + R_radar_;
+        
+        // === Mahalanobis Distance Chi-Square Gating ===
+        const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
+        
+        if (params_.enable_false_detection_radar && d_mahal_sq > params_.chi2_threshold_radar) {
+            PRINT_WARNING(YELLOW "[RADAR]: False detection rejected (Mahalanobis d²=%.2f > %.2f)" RESET "\n",
+                        d_mahal_sq, params_.chi2_threshold_radar)
+            return Vector6d::Zero();
+        }
+        
+        // Kalman gain
+        const Eigen::Matrix<double, 20, 6> K = PH_T * S.inverse();
+        
+        // Error state correction
+        const ErrorState delta_x = K * innovation;
+        
+        // Inject error into nominal state
+        x_ = injectErrorState(x_, delta_x);
+        
+        // Covariance update (Joseph form for 6x6 R)
+        const StateJacobian I_KH = StateJacobian::Identity() - K * H_radar_;
+        ErrorCovariance P_updated = I_KH * P_ * I_KH.transpose() 
+                                   + K * R_radar_ * K.transpose();
+        
+        // ESKF reset
+        P_ = resetCovariance(P_updated, delta_x);
+        
+        return innovation;
+    } else {
+        // === Position-only 3D update (use_vr == false) ===
+        // Predicted measurement [p_r] from state
+        const Vector3d z_pred = state_access::getPosition(x_);
+        
+        // Innovation (position only)
+        const Vector3d innovation_pos = z_radar.head<3>() - z_pred;
+        
+        // Use only top 3 rows of H_radar_ (position part)
+        const Eigen::Matrix<double, 3, 20> H_pos = H_radar_.topRows<3>();
+        
+        // Use only top-left 3x3 block of R_radar_ (position noise)
+        const Eigen::Matrix3d R_pos = R_radar_.topLeftCorner<3, 3>();
+        
+        // Innovation covariance
+        const Eigen::Matrix<double, 20, 3> PH_T = P_ * H_pos.transpose();
+        const Eigen::Matrix3d S = H_pos * PH_T + R_pos;
+        
+        // === Mahalanobis Distance Chi-Square Gating ===
+        // Note: 3 DoF for position-only measurement
+        const double d_mahal_sq = innovation_pos.transpose() * S.inverse() * innovation_pos;
+        
+        // Use chi2inv(0.9999, 3) = 16.27 for 3 DoF
+        constexpr double chi2_threshold_3dof = 16.27;
+        if (params_.enable_false_detection_radar && d_mahal_sq > chi2_threshold_3dof) {
+            PRINT_WARNING(YELLOW "[RADAR]: False detection rejected (Mahalanobis d²=%.2f > %.2f)" RESET "\n",
+                        d_mahal_sq, chi2_threshold_3dof)
+            return Vector6d::Zero();
+        }
+        
+        // Kalman gain
+        const Eigen::Matrix<double, 20, 3> K = PH_T * S.inverse();
+        
+        // Error state correction
+        const ErrorState delta_x = K * innovation_pos;
+        
+        // Inject error into nominal state
+        x_ = injectErrorState(x_, delta_x);
+        
+        // Covariance update (Joseph form for 3x3 R)
+        const StateJacobian I_KH = StateJacobian::Identity() - K * H_pos;
+        ErrorCovariance P_updated = I_KH * P_ * I_KH.transpose() 
+                                   + K * R_pos * K.transpose();
+        
+        // ESKF reset
+        P_ = resetCovariance(P_updated, delta_x);
+        
+        // Return 6D innovation with zeros for velocity part
+        Vector6d innovation_full = Vector6d::Zero();
+        innovation_full.head<3>() = innovation_pos;
+        return innovation_full;
     }
-    
-    // Kalman gain
-    const Eigen::Matrix<double, 20, 6> K = PH_T * S.inverse();
-    
-    // Error state correction
-    const ErrorState delta_x = K * innovation;
-    
-    // Inject error into nominal state
-    x_ = injectErrorState(x_, delta_x);
-    
-    // Covariance update (Joseph form for 6x6 R)
-    const StateJacobian I_KH = StateJacobian::Identity() - K * H_radar_;
-    ErrorCovariance P_updated = I_KH * P_ * I_KH.transpose() 
-                               + K * R_radar_ * K.transpose();
-    
-    // ESKF reset
-    P_ = resetCovariance(P_updated, delta_x);
-    
-    return innovation;
 }
 
 // ============================================================================
@@ -426,11 +483,11 @@ bool ErrorStateKalmanFilter::detectZUPT(const Vector3d& omega_meas,
     
     // Innovation: y = 0 - predicted_meas = -(meas - bias + R'g)
     Vector6d z_tilde;
-    z_tilde.head<3>() = -(a_meas - b_acc + R_b2e.transpose() * constants::GRAVITY_NED);
+    z_tilde.head<3>() = -(a_meas - b_acc + R_b2e.transpose() * gravity_ned_);
     z_tilde.tail<3>() = -(omega_meas - b_gyr);
     
     // Compute ZUPT Jacobian
-    const ZUPTJacobian H = computeZUPTJacobian(x_);
+    const ZUPTJacobian H = computeZUPTJacobian(x_, gravity_ned_);
     
     // Chi-square test: z' * (H*P*H' + α*R)^-1 * z < χ²
     const ZUPTNoise S = H * P_ * H.transpose() + params_.zupt_alpha * R_zupt_;
@@ -461,11 +518,11 @@ Vector6d ErrorStateKalmanFilter::correctZUPT(const Vector3d& omega_meas,
     
     // Innovation: y = 0 - predicted_meas = -(meas - bias + R'g)
     Vector6d innovation;
-    innovation.head<3>() = -(a_meas - b_acc + R_b2e.transpose() * constants::GRAVITY_NED);
+    innovation.head<3>() = -(a_meas - b_acc + R_b2e.transpose() * gravity_ned_);
     innovation.tail<3>() = -(omega_meas - b_gyr);
     
     // Compute ZUPT Jacobian (depends on current attitude)
-    const ZUPTJacobian H = computeZUPTJacobian(x_);
+    const ZUPTJacobian H = computeZUPTJacobian(x_, gravity_ned_);
     
     // Innovation covariance (use non-inflated noise for update)
     const Eigen::Matrix<double, 20, 6> PH_T = P_ * H.transpose();

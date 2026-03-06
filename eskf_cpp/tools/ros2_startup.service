@@ -1,0 +1,14 @@
+[Unit]
+Description=ROS2 ESKF and Relative Position Node Startup
+After=network.target
+
+[Service]
+Type=simple
+User=ituarc
+Environment="HOME=/home/ituarc"
+ExecStart=/home/ituarc/ros2_ws/src/eskf_cpp/tools/ros2_startup.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

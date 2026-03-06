@@ -333,6 +333,7 @@ private:
     NominalState x_;                 ///< Current nominal state (18x1)
     ErrorCovariance P_;              ///< Current error covariance (17x17)
     ProcessNoise Qd_;                ///< Discrete process noise (12x12)
+    Vector3d gravity_ned_;           ///< Gravity vector in NED frame [m/s²]
     
     double current_time_;            ///< Current timestamp
     

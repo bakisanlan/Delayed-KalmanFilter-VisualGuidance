@@ -16,44 +16,50 @@ topics:
 
 # Timing Parameters
 timing:
-  imu_rate_hz: 200          # IMU sensor rate [Hz]
-  eskf_rate_hz: 200         # ESKF update rate [Hz] (can be <= imu_rate_hz)
+  imu_rate_hz: 195          # IMU sensor rate [Hz]
+  eskf_rate_hz: 100         # ESKF update rate [Hz] (can be <= imu_rate_hz)
   image_rate_hz: 30         # Image measurement rate [Hz]
   radar_rate_hz: 0.5        # Radar measurement rate [Hz]
   image_delay_ms: 0        # Image processing delay [ms]
   image_timeout_sec: 2.0    # Freeze pbar evolution after this many seconds without image [s]
 
-# IMU Noise Parameters (Paper Notation)
+# IMU Noise Parameters (Sola Paper Notation)
 #   σ_ãn [m/s²]     : Accelerometer measurement noise std
 #   σ_ω̃n [rad/s]    : Gyroscope measurement noise std
 #   σ_aw [m/s²√s]   : Accelerometer bias random walk
 #   σ_ωw [rad/s√s]  : Gyroscope bias random walk
 imu_noise:
-  sigma_a_n: 0.17121490151295873            # Accel noise [m/s²] (~10 mg typical MEMS)
-  sigma_omega_n: 0.008318168141634986       # Gyro noise [rad/s] (~0.57 deg/s)
-  sigma_a_w: 0.001431059201817203        # Accel bias random walk [m/s²√s]
-  sigma_omega_w: 3.664343e-05    # Gyro bias random walk [rad/s√s]
+  sigma_a_n: 0.19953898572 #0.35121490151295873(matlab tested exag.)      #0.17121490151295873(matlab tested)            # Accel noise [m/s²] (~10 mg typical MEMS)
+  sigma_omega_n: 0.007733389 #0.017318168141634986  #0.008318168141634986       # Gyro noise [rad/s] (~0.57 deg/s)
+  sigma_a_w: 0.00024348074  #0.001431059201817203        # Accel bias random walk [m/s²√s]
+  sigma_omega_w: 0.00001557916 #3.664343e-05    # Gyro bias random walk [rad/s√s]
 
 # Sensor Noise Covariances
 measurement_noise:
   image_sigma: 0.03       # Normalized image coordinate noise (~5 pixels)
-  radar_sigma_pos: 1.0     # RADAR position noise [m]
+  radar_sigma_pos: 10.0     # RADAR position noise [m]
   radar_sigma_vel: 0.5     # RADAR velocity noise [m/s]
 
 # Chi-Square Gating Thresholds (for outlier rejection)
 # chi2inv(0.9999, DoF) - 99.99% confidence level
 chi2_gating:
   enable_false_detection_image: true   # Enable chi-square gating for image measurements
-  enable_false_detection_radar: false   # Enable chi-square gating for radar measurements
+  enable_false_detection_radar: true   # Enable chi-square gating for radar measurements
   image_threshold: 18.42   # 2 DoF (pbar_x, pbar_y)
-  radar_threshold: 27.86   # 6 DoF (pr, vr)
+  #radar_threshold: 27.86   # 6 DoF (pr, vr)
+  radar_threshold: 50.86   # 3 DoF (pr)
+
+
+# Radar Configuration
+radar:
+  use_vr: false            # Use velocity from radar (set true only if radar provides velocity)
 
 # Initial State Uncertainties (standard deviations)
 initial_covariance:
   attitude: 0.05           # ~3° attitude uncertainty [rad]
   position: 3.0            # Position uncertainty [m]
   velocity: 0.5            # Velocity uncertainty [m/s]
-  pbar: 1                # Image feature uncertainty
+  pbar: 1.0                # Image feature uncertainty
   gyro_bias: 0.005         # Gyro bias uncertainty [rad/s]
   accel_bias: 0.05         # Accel bias uncertainty [m/s²]
 
@@ -68,7 +74,7 @@ camera:
 
 # Physical Constants
 constants:
-  gravity: 9.81            # Gravity magnitude [m/s²]
+  gravity: 9.8065            # Gravity magnitude [m/s²]
 
 # History Buffer (for delayed measurement handling)
 history:

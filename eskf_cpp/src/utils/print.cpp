@@ -21,7 +21,30 @@
 
 #include "eskf_cpp/utils/print.hpp"
 
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
 using namespace eskf;
+
+// Helper function to get current timestamp string
+static std::string getTimestamp() {
+  auto now = std::chrono::system_clock::now();
+  auto time_t_now = std::chrono::system_clock::to_time_t(now);
+  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now.time_since_epoch()) % 1000;
+  
+  std::tm tm_now;
+  localtime_r(&time_t_now, &tm_now);
+  
+  std::ostringstream oss;
+  oss << std::setfill('0') 
+      << std::setw(2) << tm_now.tm_hour << ":"
+      << std::setw(2) << tm_now.tm_min << ":"
+      << std::setw(2) << tm_now.tm_sec << "."
+      << std::setw(3) << ms.count();
+  return oss.str();
+}
 
 // Need to define the static variable for everything to work
 Printer::PrintLevel Printer::current_print_level = PrintLevel::INFO;
@@ -82,6 +105,9 @@ void Printer::debugPrint(PrintLevel level, const char location[], const char lin
   if (static_cast<int>(level) < static_cast<int>(Printer::current_print_level)) {
     return;
   }
+
+  // Print timestamp first
+  printf("[%s] ", getTimestamp().c_str());
 
   // Print the location info first for our debug output
   // Truncate the filename to the max size for the filepath

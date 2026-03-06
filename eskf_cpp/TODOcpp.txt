@@ -7,6 +7,14 @@ TODO:
 
     -Fix divergence issue after camera pbar measurement(done)
     -Add magnetometer measurements(done, need bug fix, currently filter tends to diverge when mag correct open)
+    -Solve attitude jumping problem
     
     
-    
+	PLOTTING:
+	  move ekf log folder to its inside,DONE
+	  add timestamp on terminal log, DONE 
+	  modify plot viewr to check new folder path
+	  fix plot
+	  add GT to plot, DONE
+
+

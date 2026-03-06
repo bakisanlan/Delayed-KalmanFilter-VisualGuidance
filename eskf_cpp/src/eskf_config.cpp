@@ -56,6 +56,17 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
     YAML::Node config = YAML::Load(yaml_content);
     ESKFParams params;
     
+    // === Topic Names ===
+    if (config["topics"]) {
+        const auto& topics = config["topics"];
+        params.topic_imu = getScalar<std::string>(topics, "imu", "/mavros/imu/data_raw");
+        params.topic_mag = getScalar<std::string>(topics, "mag", "/mavros/imu/mag");
+        params.topic_image = getScalar<std::string>(topics, "image", "/yolo/target");
+        params.topic_radar = getScalar<std::string>(topics, "radar", "/radar/pr");
+        params.topic_odom = getScalar<std::string>(topics, "output_state", "/eskf/odom");
+        params.topic_pbar = getScalar<std::string>(topics, "output_pose", "/eskf/pbar");
+    }
+    
     // === Timing Parameters ===
     if (config["timing"]) {
         const auto& timing = config["timing"];
@@ -83,6 +94,12 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
         params.sigma_img = getScalar<double>(meas, "image_sigma", 0.005);
         params.sigma_radar_pos = getScalar<double>(meas, "radar_pos_sigma", 1.0);
         params.sigma_radar_vel = getScalar<double>(meas, "radar_vel_sigma", 0.5);
+    }
+    
+    // === Radar Configuration ===
+    if (config["radar"]) {
+        const auto& radar = config["radar"];
+        params.use_vr = getScalar<bool>(radar, "use_vr", false);
     }
     
     // === Initial Covariance ===
@@ -113,6 +130,11 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
     // === History Buffer ===
     if (config["history"]) {
         params.history_length = getScalar<int>(config["history"], "buffer_length", 25);
+    }
+    
+    // === Physical Constants ===
+    if (config["constants"]) {
+        params.gravity = getScalar<double>(config["constants"], "gravity", 9.81);
     }
     
     // === ZUPT (Zero Velocity Update) ===
@@ -171,6 +193,12 @@ void printConfig(const ESKFParams& params) {
     PRINT_INFO(CYAN "  Image:     %.4f" RESET "\n", params.sigma_img)
     PRINT_INFO(CYAN "  Radar pos: %.2f m" RESET "\n", params.sigma_radar_pos)
     PRINT_INFO(CYAN "  Radar vel: %.2f m/s" RESET "\n", params.sigma_radar_vel)
+    
+    PRINT_INFO(BOLDWHITE "\nRadar:" RESET "\n")
+    PRINT_INFO(CYAN "  Use vr:    %s" RESET "\n", params.use_vr ? GREEN "yes" RESET : RED "no" RESET)
+    
+    PRINT_INFO(BOLDWHITE "\nConstants:" RESET "\n")
+    PRINT_INFO(CYAN "  Gravity:   %.4f m/s²" RESET "\n", params.gravity)
     
     PRINT_INFO(BOLDWHITE "\nInitial Covariance (1-sigma):" RESET "\n")
     PRINT_INFO(CYAN "  Attitude:  %.4f rad" RESET "\n", params.init_sigma_attitude)

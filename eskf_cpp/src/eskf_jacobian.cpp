@@ -190,7 +190,7 @@ ESKFJacobians computeESKFJacobians(
 // ZUPT (Zero Velocity Update) Jacobian
 // ============================================================================
 
-ZUPTJacobian computeZUPTJacobian(const NominalState& x_nominal) {
+ZUPTJacobian computeZUPTJacobian(const NominalState& x_nominal, const Vector3d& gravity_ned) {
     using namespace state_access;
     using namespace math;
     
@@ -202,7 +202,7 @@ ZUPTJacobian computeZUPTJacobian(const NominalState& x_nominal) {
     const RotationMatrix R_b2e = quaternionToRotation(q);
     
     // Gravity in body frame: R_b2e' * g_ned = R_e2b * g_ned
-    const Vector3d g_body = R_b2e.transpose() * constants::GRAVITY_NED;
+    const Vector3d g_body = R_b2e.transpose() * gravity_ned;
     
     // === Row 0-2 (Accelerometer): H1 = [skew(R'g)  0₃  0₃  0₂  0₃  -I₃] ===
     // Linearization comes from: R_true' = (I - skew(δθ)) * R_nom'

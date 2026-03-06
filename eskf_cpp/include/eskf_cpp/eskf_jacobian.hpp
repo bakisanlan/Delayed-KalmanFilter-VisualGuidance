@@ -67,9 +67,10 @@ ESKFJacobians computeESKFJacobians(
  *   H2 = [0₃              0₃  0₃  0₂  -I₃  0₃  0₃]  (gyro rows)
  * 
  * @param x_nominal Current nominal state (for extracting quaternion/biases)
+ * @param gravity_ned Gravity vector in NED frame [m/s²]
  * @return 6x20 ZUPT measurement Jacobian
  */
-ZUPTJacobian computeZUPTJacobian(const NominalState& x_nominal);
+ZUPTJacobian computeZUPTJacobian(const NominalState& x_nominal, const Vector3d& gravity_ned);
 
 /**
  * @brief Compute magnetometer measurement Jacobian

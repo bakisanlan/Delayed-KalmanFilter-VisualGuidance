@@ -22,6 +22,7 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <mavros_msgs/msg/state.hpp>
 
 #include <fstream>
 #include <filesystem>
@@ -38,19 +39,13 @@ public:
     ESKFNode() : Node("eskf_node") {
         // Declare parameters
         this->declare_parameter("config_file", "");
-        this->declare_parameter("imu_topic", "/mavros/imu/data_raw");
-        this->declare_parameter("mag_topic", "/mavros/imu/mag");
-        this->declare_parameter("image_topic", "/yolo/target");
-        this->declare_parameter("radar_topic", "/radar/pr");
-        this->declare_parameter("odom_topic", "/eskf/odom");
-        this->declare_parameter("pbar_topic", "/eskf/pbar");
         this->declare_parameter("print_level", "INFO");  // ALL, DEBUG, INFO, WARNING, ERROR, SILENT
         
         // Set print level from parameter
         std::string print_level = this->get_parameter("print_level").as_string();
         Printer::setPrintLevel(print_level);
         
-        // Load configuration
+        // Load configuration (includes topic names)
         std::string config_file = this->get_parameter("config_file").as_string();
         if (!config_file.empty()) {
             try {
@@ -65,11 +60,11 @@ public:
         // Create ESKF instance
         eskf_ = std::make_unique<ErrorStateKalmanFilter>(params_);
         
-        // Setup subscribers
-        std::string imu_topic = this->get_parameter("imu_topic").as_string();
-        std::string mag_topic = this->get_parameter("mag_topic").as_string();
-        std::string image_topic = this->get_parameter("image_topic").as_string();
-        std::string radar_topic = this->get_parameter("radar_topic").as_string();
+        // Get topic names from loaded config
+        const std::string& imu_topic = params_.topic_imu;
+        const std::string& mag_topic = params_.topic_mag;
+        const std::string& image_topic = params_.topic_image;
+        const std::string& radar_topic = params_.topic_radar;
         
         // IMU subscription with sensor_data QoS (best effort) to match MAVROS
         rclcpp::QoS imu_qos(10);
@@ -91,15 +86,24 @@ public:
             radar_topic, 10,
             std::bind(&ESKFNode::radarCallback, this, std::placeholders::_1));
         
-        // Setup publishers
-        std::string odom_topic = this->get_parameter("odom_topic").as_string();
-        std::string pbar_topic = this->get_parameter("pbar_topic").as_string();
+        // MAVROS State subscription (for mission complete detection)
+        state_sub_ = this->create_subscription<mavros_msgs::msg::State>(
+            "/mavros/state", 10,
+            std::bind(&ESKFNode::stateCallback, this, std::placeholders::_1));
+        
+        // Setup publishers (from config)
+        const std::string& odom_topic = params_.topic_odom;
+        const std::string& pbar_topic = params_.topic_pbar;
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>(odom_topic, 10);
         pbar_pub_ = this->create_publisher<geometry_msgs::msg::Point>(pbar_topic, 10);
         
         // Timer for diagnostics (1 Hz)
         diag_timer_ = this->create_wall_timer(
             1s, std::bind(&ESKFNode::diagnosticsCallback, this));
+        
+        // Timer for periodic log flush (30 seconds)
+        log_flush_timer_ = this->create_wall_timer(
+            30s, std::bind(&ESKFNode::logFlushCallback, this));
         
         // Compute samples per ESKF update
         samples_per_eskf_ = std::max(1, static_cast<int>(
@@ -234,7 +238,10 @@ private:
         Vector2d z_pbar(msg->x, msg->y);
         Vector2d innovation = eskf_->correctImage(z_pbar, delay_steps_);
         
-        if (innovation.norm() > 0) {
+        // Throttled logging (~1 per second based on image_rate_hz ~30)
+        static int image_log_counter = 0;
+        constexpr int image_log_skip = 30;  // ~30 Hz image rate
+        if (innovation.norm() > 0 && ++image_log_counter % image_log_skip == 0) {
             PRINT_DEBUG(CYAN "[IMAGE]: Innovation = [%.4f, %.4f]" RESET "\n", innovation(0), innovation(1))
         }
     }
@@ -252,9 +259,14 @@ private:
         eskf_->notifyRadarReceived();
         Vector6d innovation = eskf_->correctRadar(z_radar);
         
-        PRINT_DEBUG(BLUE "[RADAR]: Innovation pos=[%.3f,%.3f,%.3f] vel=[%.3f,%.3f,%.3f]" RESET "\n",
-                    innovation(0), innovation(1), innovation(2),
-                    innovation(3), innovation(4), innovation(5))
+        // Throttled logging (~1 per second)
+        static int radar_log_counter = 0;
+        constexpr int radar_log_skip = 10;  // Log every message (radar is already slow)
+        if (++radar_log_counter % radar_log_skip == 0) {
+            PRINT_DEBUG(BLUE "[RADAR]: Innovation pos=[%.3f,%.3f,%.3f] vel=[%.3f,%.3f,%.3f]" RESET "\n",
+                        innovation(0), innovation(1), innovation(2),
+                        innovation(3), innovation(4), innovation(5))
+        }
     }
     
     void magCallback(const sensor_msgs::msg::MagneticField::SharedPtr msg) {
@@ -298,6 +310,36 @@ private:
                        innovation(0), innovation(1), innovation(2),
                        bmag(0), bmag(1), bmag(2))
         }
+    }
+    
+    void stateCallback(const mavros_msgs::msg::State::SharedPtr msg) {
+        // Track armed state transitions
+        bool currently_armed = msg->armed;
+        
+        // Detect armed -> disarmed transition (mission complete)
+        if (was_armed_ && !currently_armed) {
+            PRINT_INFO(BOLDGREEN "\n========== MISSION COMPLETE ==========" RESET "\n")
+            PRINT_INFO(GREEN "[STATE]: Drone DISARMED after mission" RESET "\n")
+            
+            // Flush and close log file
+            if (log_file_.is_open()) {
+                log_file_.flush();
+                log_file_.close();
+                PRINT_INFO(GREEN "[LOG]: File saved and closed" RESET "\n")
+            }
+            
+            PRINT_INFO(GREEN "[ESKF]: Shutting down node..." RESET "\n")
+            PRINT_INFO(BOLDGREEN "========================================" RESET "\n\n")
+            
+            // Request shutdown
+            rclcpp::shutdown();
+        }
+        
+        // Update armed state for next callback
+        if (currently_armed && !was_armed_) {
+            PRINT_INFO(BOLDGREEN "[STATE]: Drone ARMED - mission started" RESET "\n")
+        }
+        was_armed_ = currently_armed;
     }
     
     void initializeFilter(const Vector6d& z_radar) {
@@ -470,7 +512,7 @@ private:
     void diagnosticsCallback() {
         if (!is_initialized_) {
             static int diag_wait_counter = 0;
-            if (++diag_wait_counter % 5 == 0) {
+            if (++diag_wait_counter % 1 == 0) {
                 PRINT_WARNING(YELLOW "[ESKF]: Waiting for radar..." RESET "\n")
             }
             return;
@@ -517,6 +559,13 @@ private:
             P_att, P_pos, P_vel, P_pbar, current_hz)
     }
     
+    void logFlushCallback() {
+        if (log_file_.is_open()) {
+            log_file_.flush();
+            PRINT_DEBUG(GREEN "[LOG]: Periodic flush (30s)" RESET "\n")
+        }
+    }
+    
     // Members
     ESKFParams params_;
     std::unique_ptr<ErrorStateKalmanFilter> eskf_;
@@ -525,9 +574,14 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr mag_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr image_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr radar_sub_;
+    rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr state_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr pbar_pub_;
     rclcpp::TimerBase::SharedPtr diag_timer_;
+    rclcpp::TimerBase::SharedPtr log_flush_timer_;
+    
+    // Mission complete detection
+    bool was_armed_ = false;
     
     bool is_initialized_ = false;
     int imu_count_ = 0;

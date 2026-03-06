@@ -47,6 +47,7 @@ find_package(sensor_msgs QUIET)
 find_package(geometry_msgs QUIET)
 find_package(nav_msgs QUIET)
 find_package(std_msgs QUIET)
+find_package(mavros_msgs QUIET)
 find_package(rosidl_default_generators QUIET)
 
 set(ROS2_FOUND FALSE)
@@ -122,6 +123,7 @@ if(ROS2_FOUND)
       ${geometry_msgs_TARGETS}
       ${nav_msgs_TARGETS}
       ${std_msgs_TARGETS}
+      ${mavros_msgs_TARGETS}
     PRIVATE
       eskf_core
   )
@@ -133,6 +135,7 @@ if(ROS2_FOUND)
     ${geometry_msgs_INCLUDE_DIRS}
     ${nav_msgs_INCLUDE_DIRS}
     ${std_msgs_INCLUDE_DIRS}
+    ${mavros_msgs_INCLUDE_DIRS}
   )
   
   if(rosidl_default_generators_FOUND)

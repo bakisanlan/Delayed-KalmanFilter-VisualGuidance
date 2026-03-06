@@ -169,14 +169,13 @@ namespace noise_idx {
 // ============================================================================
 
 namespace constants {
-    /// Gravity magnitude [m/s²]
-    constexpr double GRAVITY = 9.81;
+    /// DEFAULT Gravity magnitude [m/s²] - can be overridden via ESKFParams.gravity
+    constexpr double DEFAULT_GRAVITY = 9.81;
     
-    /// Gravity vector in NED frame (positive down)
-    inline const Vector3d GRAVITY_NED{0.0, 0.0, GRAVITY};
-    
-    /// Unit vector in z-direction
+    /// Unit vector in z-direction (gravity direction in NED)
     inline const Vector3d E3{0.0, 0.0, 1.0};
+    
+
     
     /// Minimum camera depth to prevent division by zero [m]
     constexpr double MIN_DEPTH = 0.1;
@@ -229,6 +228,14 @@ struct StateHistoryEntry {
  * @brief Configuration parameters for the ESKF
  */
 struct ESKFParams {
+    // Topic names (ROS2)
+    std::string topic_imu = "/mavros/imu/data_raw";    ///< IMU topic
+    std::string topic_mag = "/mavros/imu/mag";          ///< Magnetometer topic
+    std::string topic_image = "/yolo/target";           ///< Image feature topic
+    std::string topic_radar = "/radar/pr";              ///< Radar topic
+    std::string topic_odom = "/eskf/odom";              ///< Output odometry topic
+    std::string topic_pbar = "/eskf/pbar";              ///< Output pbar topic
+    
     // Timing parameters
     double dt_imu = 1.0 / 200.0;     ///< IMU sampling period [s]
     double dt_eskf = 1.0 / 200.0;    ///< ESKF update period [s]
@@ -269,6 +276,10 @@ struct ESKFParams {
     bool enable_false_detection_radar = true;  ///< Enable chi-square gating for radar
     double chi2_threshold_image = 18.42; ///< 2 DoF image measurement
     double chi2_threshold_radar = 27.86; ///< 6 DoF radar measurement
+    bool use_vr = false;                 ///< Use radar velocity (vr) in measurement update
+    
+    // Physical constants
+    double gravity = 9.81;               ///< Gravity magnitude [m/s²]
     
     // ZUPT (Zero Velocity Update) parameters
     double zupt_alpha = 1.0;             ///< Noise inflation for ZUPT chi-square test

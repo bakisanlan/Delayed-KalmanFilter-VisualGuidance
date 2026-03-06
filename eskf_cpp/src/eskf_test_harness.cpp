@@ -126,7 +126,7 @@ void propagateTrueState(TrueState& state, double t, double dt,
     state.q = math::normalizeQuaternion(state.q);
     
     // Update velocity (earth frame)
-    Vector3d a_world = R_b2e * state.a_body_true + constants::GRAVITY_NED;
+    Vector3d a_world = R_b2e * state.a_body_true + gravity_vec;
     Vector3d v_int_new = state.v_int + a_world * dt;
     
     // Update position (trapezoidal)
