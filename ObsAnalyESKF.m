@@ -12,7 +12,7 @@ clear; clc; close all;
 
 %% ======================== SIMULATION PARAMETERS ========================
 dt_imu = 1/200;           % IMU update rate: 200 Hz
-N_steps = 4000;            % Number of steps for Gramian computation
+N_steps = 40000;            % Number of steps for Gramian computation
 g = 9.81;                 % Gravity
 e3 = [0; 0; 1];           % Unit vector z
 
@@ -35,16 +35,19 @@ idx_dvr    = 7:9;     % Velocity error
 idx_dpbar  = 10:11;   % Image feature error
 idx_dbgyr  = 12:14;   % Gyro bias error
 idx_dbacc  = 15:17;   % Accel bias error
+idx_bmag   = 19:21;
 
 %% ======================== INITIAL CONDITIONS ========================
 % Interceptor initial state
-p_int = [1000; 0; -40];
+% p_int = [1000; 2000; -40];
+p_int = [0; 0; -65];          % Interceptor position (NED)
 v_int = [0; 0; 0];
 yaw_init = 0;
 q_true = eul2quat([yaw_init, 0, 0], 'ZYX')';
 
 % Target initial state
-p_tgt = [3000; 0; -40];
+% p_tgt = [3000; 0; -40];
+p_tgt = [80; 30; -40];        % Target position
 v_tgt = [0; 0; 0];
 
 % Relative state
@@ -59,14 +62,16 @@ b_acc_true = 0*[0.02; -0.01; 0.015];
 pbar_true = compute_image_features(p_r_true, q_true, R_b2c);
 
 % Assemble initial true nominal state (18x1)
-x_true = [q_true; p_r_true; v_r_true; pbar_true; b_gyr_true; b_acc_true];
+x_true = [q_true; p_r_true; v_r_true; pbar_true; b_gyr_true; b_acc_true; [0; 0; 0;]];
 
 %% ======================== MEASUREMENT MATRIX H (ERROR STATE) ========================
 % H maps error state (17x1) to measurements
 % Measurements: z = [pbar (2x1); p_r (3x1)]
 H = zeros(5, 17);
-H(1:2, idx_dpbar) = eye(2);   % pbar measurement
+H(1:2, idx_dpbar) = 0*eye(2);   % pbar measurement
 H(3:5, idx_dpr) = eye(3);     % RADAR position measurement
+% H(3:5, idx_dvr) = eye(3);     % RADAR position measurement
+
 
 %% ======================== OBSERVABILITY GRAMIAN COMPUTATION ========================
 % Initialize Gramian (17x17 for error state)
@@ -83,11 +88,12 @@ fprintf('Computing ESKF Observability Gramian over %d steps...\n', N_steps);
 for k = 1:N_steps
     t = (k-1) * dt_imu;
     
-    %% Propagate true nominal state to get current trajectory point
-    [x_true, p_int, v_int, p_tgt, v_tgt, omega_true, a_body_true] = ...
-        propagate_true_state(x_true, p_int, v_int, p_tgt, v_tgt, ...
-                             t, dt_imu, g, e3, R_b2c, ...
-                             idx_q, idx_pr, idx_vr, idx_pbar, idx_bgyr, idx_bacc);
+%% Propagate true nominal state to get current trajectory point
+
+[x_true, p_int, v_int, p_tgt, v_tgt, omega_true, a_body_true] = ...
+    propagate_true_state(x_true, p_int, v_int, p_tgt, v_tgt, ...
+                         t, dt_imu, g, e3, R_b2c, ...
+                         idx_q, idx_pr, idx_vr, idx_pbar, idx_bgyr, idx_bacc, idx_bmag);
     
     %% Extract nominal states for Jacobian computation
     q = x_true(idx_q);
@@ -111,7 +117,7 @@ for k = 1:N_steps
     
     %% Compute ESKF error state transition Jacobian Fd_k
     [~, ~, Fd_k, ~] = compute_eskf_jacobians(x_true, omega_meas, a_meas, dt_imu, R_b2c);
-    
+    Fd_k = Fd_k(1:17,1:17);  %exclude magnetometer reading
     % Store for analysis
     Fd_history(:,:,k) = Fd_k;
     

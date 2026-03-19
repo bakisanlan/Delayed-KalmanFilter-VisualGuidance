@@ -1,7 +1,7 @@
 function [x_true, p_int_new, v_int_new, p_tgt_new, v_tgt_new, omega_true, a_body_true] = ...
     propagate_true_state(x_true, p_int, v_int, p_tgt, v_tgt, ...
                          t, dt, g, e3, R_b2c, ...
-                         idx_q, idx_pr, idx_vr, idx_pbar, idx_bgyr, idx_bacc)
+                         idx_q, idx_pr, idx_vr, idx_pbar, idx_bgyr, idx_bacc, idx_bmag,p_tgt_center)
 % PROPAGATE_TRUE_STATE Propagate true state for simulation
 %
 % Merges interceptor dynamics, target dynamics, and image feature dynamics
@@ -38,6 +38,7 @@ function [x_true, p_int_new, v_int_new, p_tgt_new, v_tgt_new, omega_true, a_body
     pbar = x_true(idx_pbar);
     b_gyr_true = x_true(idx_bgyr);
     b_acc_true = x_true(idx_bacc);
+    b_mag_true = x_true(idx_bmag);
     
     %% ==================== INTERCEPTOR DYNAMICS ====================
     % True angular velocity (modify for different maneuvers)
@@ -50,7 +51,7 @@ function [x_true, p_int_new, v_int_new, p_tgt_new, v_tgt_new, omega_true, a_body
     
     % True specific force (gravity compensation + maneuver acceleration)
     % a_body_true = R_b2e' * (-g * e3) + sin(t) * 0*[0; 31; -62] + b_acc_true;
-    a_body_true = R_b2e' * (-g * e3) + sin(0.5 * t) *  0.1*[6;0.4 ; -0.5];% + 0.1*randn(3,1);% + b_acc_true;
+    a_body_true = R_b2e' * (-g * e3) + sin(0.5 * t) *  -0.1*[6;0.4 ; -0.5];% + 0.1*randn(3,1);% + b_acc_true;
 
 
     % Acceleration in world frame
@@ -67,12 +68,26 @@ function [x_true, p_int_new, v_int_new, p_tgt_new, v_tgt_new, omega_true, a_body
     p_int_new = p_int + 0.5 * (v_int + v_int_new) * dt;
     
     %% ==================== TARGET DYNAMICS ====================
-    % Target acceleration (modify for different target behaviors)
-    a_tgt = 0 * [0; 0; 0];  % Static target
-    
-    % Propagate target velocity and position
-    v_tgt_new = v_tgt + a_tgt * dt;
-    p_tgt_new = p_tgt + 0.5 * (v_tgt + v_tgt_new) * dt;
+    % Circular target trajectory in the horizontal plane.
+    % persistent p_tgt_center
+    % if t == 0
+    %     radius = 10;  % [m]
+    %     p_tgt_center = p_tgt - [radius; 0; 0];
+    % end
+
+    radius = 70;          % [m]
+    omega_tgt = 0.30;     % [rad/s]
+    theta_new = omega_tgt * (t + dt);
+
+    p_tgt_new = p_tgt_center + [radius * cos(theta_new);
+                                radius * sin(theta_new);
+                                0];
+    v_tgt_new = [-radius * omega_tgt * sin(theta_new);
+                  radius * omega_tgt * cos(theta_new);
+                  0];
+    a_tgt = [-radius * omega_tgt^2 * cos(theta_new);
+             -radius * omega_tgt^2 * sin(theta_new);
+             0];
 
     %% ==================== RELATIVE DYNAMICS ====================
     p_r_new = p_int_new - p_tgt_new;
@@ -112,5 +127,5 @@ function [x_true, p_int_new, v_int_new, p_tgt_new, v_tgt_new, omega_true, a_body
     end
     
     %% ==================== ASSEMBLE TRUE STATE ====================
-    x_true = [q_int_new; p_r_new; v_r_new; pbar_new; b_gyr_true; b_acc_true];
+    x_true = [q_int_new; p_r_new; v_r_new; pbar_new; b_gyr_true; b_acc_true; b_mag_true];
 end

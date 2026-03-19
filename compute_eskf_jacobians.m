@@ -1,24 +1,24 @@
 function [Fc, Gc, Fd, Gd] = compute_eskf_jacobians(x_nominal, omega_m, a_m, dt, R_b2c)
 % COMPUTE_ESKF_JACOBIANS Compute Error-State Kalman Filter Jacobians
 %
-% Error state vector (17 states):
-%   δx = [δθ(3), δpr(3), δvr(3), δpbar(2), δbgyro(3), δbacc(3)]
+% Error state vector (20 states):
+%   δx = [δθ(3), δpr(3), δvr(3), δpbar(2), δbgyro(3), δbacc(3), δbmag(3)]
 %
-% Nominal state vector (18 states):  
-%   x = [q(4), pr(3), vr(3), pbar(2), bgyro(3), bacc(3)]
+% Nominal state vector (21 states):  
+%   x = [q(4), pr(3), vr(3), pbar(2), bgyro(3), bacc(3), bmag(3)]
 %
 % Inputs:
-%   x_nominal - Nominal state vector (18x1)
+%   x_nominal - Nominal state vector (21x1)
 %   omega_m   - Measured angular velocity (3x1)
 %   a_m       - Measured body acceleration (3x1)
 %   dt        - Time step
 %   R_b2c     - Rotation from body to camera frame (3x3)
 %
 % Outputs:
-%   Fc - Continuous-time error state Jacobian (17x17)
-%   Gc - Continuous-time noise Jacobian (17x12)
-%   Fd - Discrete-time state transition matrix (17x17)
-%   Gd - Discrete-time noise Jacobian (17x12)
+%   Fc - Continuous-time error state Jacobian (20x20)
+%   Gc - Continuous-time noise Jacobian (20x15)
+%   Fd - Discrete-time state transition matrix (20x20)
+%   Gd - Discrete-time noise Jacobian (20x15)
 
     %% ==================== Extract Nominal States ====================
     % State indices for nominal state
@@ -28,6 +28,7 @@ function [Fc, Gc, Fd, Gd] = compute_eskf_jacobians(x_nominal, omega_m, a_m, dt, 
     idx_pbar = 11:12;
     idx_bgyr = 13:15;
     idx_bacc = 16:18;
+    idx_bmag = 19:21;
     
     q     = x_nominal(idx_q);
     p_r   = x_nominal(idx_pr);
@@ -40,13 +41,14 @@ function [Fc, Gc, Fd, Gd] = compute_eskf_jacobians(x_nominal, omega_m, a_m, dt, 
     pbar_y = pbar(2);
     
     %% ==================== Error State Indices ====================
-    % Error state: δx = [δθ(3), δpr(3), δvr(3), δpbar(2), δbgyro(3), δbacc(3)]
+    % Error state: δx = [δθ(3), δpr(3), δvr(3), δpbar(2), δbgyro(3), δbacc(3), δbmag(3)]
     idx_dtheta = 1:3;
     idx_dpr    = 4:6;
     idx_dvr    = 7:9;
     idx_dpbar  = 10:11;
     idx_dbgyr  = 12:14;
     idx_dbacc  = 15:17;
+    idx_dbmag  = 18:20;
     
     %% ==================== Rotation Matrices ====================
     R_b2e = quat2rotm(q');           % Body to Earth
@@ -88,8 +90,8 @@ function [Fc, Gc, Fd, Gd] = compute_eskf_jacobians(x_nominal, omega_m, a_m, dt, 
     A_pc_z = [(v_c_x - pbar_x*v_c_z) / p_c_z^2;
               (v_c_y - pbar_y*v_c_z) / p_c_z^2];
     
-    %% ==================== Build Continuous-Time Fc Matrix (17x17) ====================
-    Fc = zeros(17, 17);
+    %% ==================== Build Continuous-Time Fc Matrix (20x20) ====================
+    Fc = zeros(20, 20);
     
     % --- Row 1-3: δθ_dot = -skew(omega)*δθ - δbgyro ---
     Fc(idx_dtheta, idx_dtheta) = -skew(omega);
@@ -146,15 +148,19 @@ function [Fc, Gc, Fd, Gd] = compute_eskf_jacobians(x_nominal, omega_m, a_m, dt, 
     % --- Row 15-17: δbacc_dot = 0 (random walk handled by noise) ---
     % Fc(idx_dbacc, :) = 0  (already zero)
     
-    %% ==================== Build Continuous-Time Gc Matrix (17x12) ====================
-    % Noise vector: n = [wn(3), an(3), ww(3), aw(3)]
+    % --- Row 18-20: δbmag_dot = 0 (random walk handled by noise) ---
+    % Fc(idx_dbmag, :) = 0  (already zero)
+    
+    %% ==================== Build Continuous-Time Gc Matrix (20x15) ====================
+    % Noise vector: n = [wn(3), an(3), ww(3), aw(3), mw(3)]
     %   wn = gyro measurement noise
     %   an = accel measurement noise
     %   ww = gyro bias random walk
     %   aw = accel bias random walk
+    %   mw = mag bias random walk
     % (-) is not logical, because they are white noise around 0
 
-    Gc = zeros(17, 12);
+    Gc = zeros(20, 15);
     
     % δθ_dot affected by gyro noise: -wn 
     Gc(idx_dtheta, 1:3) = -eye(3);
@@ -176,6 +182,9 @@ function [Fc, Gc, Fd, Gd] = compute_eskf_jacobians(x_nominal, omega_m, a_m, dt, 
     % δbacc_dot affected by bias random walk: aw
     Gc(idx_dbacc, 10:12) = eye(3);
     
+    % δbmag_dot affected by bias random walk: mw
+    Gc(idx_dbmag, 13:15) = eye(3);
+    
     %% ==================== Discretization ====================
     % Method 1: First-order approximation
     %   Fd ≈ I + Fc*dt
@@ -195,8 +204,8 @@ function [Fc, Gc, Fd, Gd] = compute_eskf_jacobians(x_nominal, omega_m, a_m, dt, 
     omega_dt = omega * dt;
     Phi_theta = exp_rot(-omega_dt);  % 3x3 rotation  % NOTE: CHECK THAT sign
     
-    % --- Build Fd (17x17) ---
-    Fd = eye(17) + Fc * dt;
+    % --- Build Fd (20x20) ---
+    Fd = eye(20) + Fc * dt;
     
     % Replace attitude block with exact exponential
     Fd(idx_dtheta, idx_dtheta) = Phi_theta;

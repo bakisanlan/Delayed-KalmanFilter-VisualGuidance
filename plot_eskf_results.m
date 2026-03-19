@@ -1,15 +1,15 @@
 function plot_eskf_results(t, x_true, x_est, P_diag, ...
-                           idx_q, idx_pr, idx_vr, idx_pbar, idx_bgyr, idx_bacc, ...
-                           idx_dtheta, idx_dpr, idx_dvr, idx_dpbar, idx_dbgyr, idx_dbacc)
+                           idx_q, idx_pr, idx_vr, idx_pbar, idx_bgyr, idx_bacc, idx_bmag, ...
+                           idx_dtheta, idx_dpr, idx_dvr, idx_dpbar, idx_dbgyr, idx_dbacc, idx_dbmag)
 % PLOT_ESKF_RESULTS Plot Error-State Kalman Filter estimation results
 %
 % Inputs:
 %   t         - Time vector
-%   x_true    - True nominal state history (18 x N)
-%   x_est     - Estimated nominal state history (18 x N)
-%   P_diag    - Diagonal of error covariance matrix history (17 x N)
-%   idx_*     - Nominal state indices (18-state)
-%   idx_d*    - Error state indices (17-state)
+%   x_true    - True nominal state history (21 x N)
+%   x_est     - Estimated nominal state history (21 x N)
+%   P_diag    - Diagonal of error covariance matrix history (20 x N)
+%   idx_*     - Nominal state indices (21-state)
+%   idx_d*    - Error state indices (20-state)
 
     N = length(t);
     
@@ -168,6 +168,39 @@ function plot_eskf_results(t, x_true, x_est, P_diag, ...
     
     sgtitle('ESKF - IMU Bias Estimation Results');
     
+    %% ==================== MAGNETOMETER BIAS ESTIMATION FIGURE ====================
+    figure('Name', 'ESKF Magnetometer Bias Estimation', 'Position', [175, 175, 1200, 400]);
+    
+    subplot(1, 2, 1);
+    hold on;
+    plot(t, x_true(idx_bmag(1), :), 'b-', 'LineWidth', 1.5);
+    plot(t, x_true(idx_bmag(2), :), 'g-', 'LineWidth', 1.5);
+    plot(t, x_true(idx_bmag(3), :), 'm-', 'LineWidth', 1.5);
+    plot(t, x_est(idx_bmag(1), :), 'b--', 'LineWidth', 1.5);
+    plot(t, x_est(idx_bmag(2), :), 'g--', 'LineWidth', 1.5);
+    plot(t, x_est(idx_bmag(3), :), 'm--', 'LineWidth', 1.5);
+    xlabel('Time (s)'); ylabel('Mag Bias');
+    title('Magnetometer Bias Estimation');
+    legend('True X', 'True Y', 'True Z', 'Est X', 'Est Y', 'Est Z', 'Location', 'best');
+    grid on;
+    
+    subplot(1, 2, 2);
+    hold on;
+    for i = 1:3
+        error_i = x_true(idx_bmag(i), :) - x_est(idx_bmag(i), :);
+        plot(t, error_i, 'LineWidth', 1.5);
+    end
+    % Add 3-sigma bounds
+    sigma_bmz = sqrt(P_diag(idx_dbmag(3), :));
+    plot(t, 3*sigma_bmz, 'k--', 'LineWidth', 1);
+    plot(t, -3*sigma_bmz, 'k--', 'LineWidth', 1);
+    xlabel('Time (s)'); ylabel('Error');
+    title('Mag Bias Estimation Error with 3\sigma bounds');
+    legend('Error X', 'Error Y', 'Error Z', '\pm3\sigma', 'Location', 'best');
+    grid on;
+    
+    sgtitle('ESKF - Magnetometer Bias Estimation Results');
+    
     %% ==================== ATTITUDE ESTIMATION FIGURE ====================
     figure('Name', 'ESKF Attitude Estimation', 'Position', [200, 200, 1200, 500]);
     
@@ -280,7 +313,16 @@ function plot_eskf_results(t, x_true, x_est, P_diag, ...
     semilogy(t, sqrt(P_diag(idx_dbacc(2), :)), 'g', 'LineWidth', 1.5);
     semilogy(t, sqrt(P_diag(idx_dbacc(3), :)), 'b', 'LineWidth', 1.5);
     xlabel('Time (s)'); ylabel('\sigma (m/s^2)');
-    title('Accel Bias σ'); legend('X', 'Y', 'Z'); grid on;
+    title('Accel Bias \sigma'); legend('X', 'Y', 'Z'); grid on;
     
-    sgtitle('ESKF - Error Covariance Evolution (σ values)');
+    sgtitle('ESKF - Error Covariance Evolution (\sigma values)');
+    
+    %% ==================== MAG BIAS COVARIANCE FIGURE ====================
+    figure('Name', 'ESKF Mag Bias Covariance', 'Position', [300, 300, 500, 400]);
+    semilogy(t, sqrt(P_diag(idx_dbmag(1), :)), 'r', 'LineWidth', 1.5); hold on;
+    semilogy(t, sqrt(P_diag(idx_dbmag(2), :)), 'g', 'LineWidth', 1.5);
+    semilogy(t, sqrt(P_diag(idx_dbmag(3), :)), 'b', 'LineWidth', 1.5);
+    xlabel('Time (s)'); ylabel('\sigma');
+    title('Magnetometer Bias \sigma Evolution'); 
+    legend('X', 'Y', 'Z'); grid on;
 end
