@@ -1,0 +1,105 @@
+# ============================================================================
+# ESKF Configuration File
+# ============================================================================
+# Error-State Kalman Filter parameters for Visual Guidance
+# Based on "High-Speed Interception Multicopter Control by Image-Based Visual Servoing"
+# ============================================================================
+
+# ROS2 Topic Configuration
+topics:
+  imu: "/mavros/imu/data_raw"
+  image: "/yolo/target"
+  radar: "/radar/pr"
+  output_state: "/eskf/state"
+  output_pose: "/eskf/pose"
+  output_diagnostics: "/eskf/diagnostics"
+
+# Timing Parameters
+timing:
+  imu_rate_hz: 195          # IMU sensor rate [Hz]
+  eskf_rate_hz: 100         # ESKF update rate [Hz] (can be <= imu_rate_hz)
+  image_rate_hz: 30         # Image measurement rate [Hz]
+  radar_rate_hz: 0.5        # Radar measurement rate [Hz]
+  image_delay_ms: 0         # Image processing delay [ms]
+  image_timeout_sec: 2.0    # Freeze pbar evolution after this many seconds without image [s]
+
+# IMU Noise Parameters (Sola Paper Notation)
+#   σ_ãn [m/s²]     : Accelerometer measurement noise std
+#   σ_ω̃n [rad/s]    : Gyroscope measurement noise std
+#   σ_aw [m/s²√s]   : Accelerometer bias random walk
+#   σ_ωw [rad/s√s]  : Gyroscope bias random walk
+imu_noise:
+  sigma_a_n: 0.19953898572 #0.35121490151295873(matlab tested exag.)      #0.17121490151295873(matlab tested)            # Accel noise [m/s²] (~10 mg typical MEMS)
+  sigma_omega_n: 0.007733389 #0.017318168141634986  #0.008318168141634986       # Gyro noise [rad/s] (~0.57 deg/s)
+  sigma_a_w: 0.00024348074  #0.001431059201817203        # Accel bias random walk [m/s²√s]
+  sigma_omega_w: 0.00001557916 #3.664343e-05    # Gyro bias random walk [rad/s√s]
+
+# Sensor Noise Covariances
+measurement_noise:
+  image_sigma: 0.03       # Normalized image coordinate noise (~5 pixels)
+  radar_sigma_pos: 10.0     # RADAR position noise [m]
+  radar_sigma_vel: 0.5     # RADAR velocity noise [m/s]
+
+# Chi-Square Gating Thresholds (for outlier rejection)
+# chi2inv(0.9999, DoF) - 99.99% confidence level
+chi2_gating:
+  enable_false_detection_image: true   # Enable chi-square gating for image measurements
+  enable_false_detection_radar: true   # Enable chi-square gating for radar measurements
+  image_threshold: 18.42   # 2 DoF (pbar_x, pbar_y)
+  radar_threshold: 50.86   # 3 DoF (pr)
+
+# Radar Configuration
+radar:
+  use_vr: false            # Use velocity from radar (set true only if radar provides velocity)
+
+# Initial State Uncertainties (standard deviations)
+initial_covariance:
+  attitude: 0.05           # ~3° attitude uncertainty [rad]
+  position: 3.0            # Position uncertainty [m]
+  velocity: 0.5            # Velocity uncertainty [m/s]
+  pbar: 1.0                # Image feature uncertainty
+  gyro_bias: 0.005         # Gyro bias uncertainty [rad/s]
+  accel_bias: 0.05         # Accel bias uncertainty [m/s²]
+
+# Camera-to-Body Transformation
+# R_b2c transforms vectors FROM body frame TO camera frame
+# Camera frame: z=forward, x=right, y=down
+# Body frame: x=forward, y=right, z=down (NED)
+camera:
+  R_b2c: [0, 1, 0,         # Camera x = Body y (right)
+          0, 0, 1,         # Camera y = Body z (down)
+          1, 0, 0]         # Camera z = Body x (forward)
+
+# Physical Constants
+constants:
+  gravity: 9.8065            # Gravity magnitude [m/s²]
+
+# History Buffer (for delayed measurement handling)
+history:
+  buffer_length: 25        # Number of states to store
+
+# ZUPT (Zero Velocity Update) Parameters
+zupt:
+  alpha: 1.0               # Noise inflation factor for chi-square detection test
+  chi2_threshold: 12.59    # 6 DoF, 95% confidence (chi2inv(0.95, 6))
+
+# Safety Limits
+safety:
+  max_covariance_trace: 1000.0   # Reset filter if exceeded
+  min_depth_z: 0.1               # Minimum camera depth [m]
+
+# Data Logging Configuration
+logging:
+  enable: true                   # Enable CSV logging of state and covariance
+  rate_hz: 200.0                 # Logging rate [Hz] (10-20 recommended)
+  file_path: "log/eskf_log.csv"  # Output file path (relative to package or absolute)
+
+# Magnetometer Configuration (NORMALIZED - using unit vectors)
+magnetometer:
+  enable: false                     # Enable/disable magnetometer correction
+  B_ned: [0.5115, 0.0543, 0.8576]
+  sigma_mag_n: 0.10
+  sigma_mag_w: 0.0002
+  init_sigma_bmag: 1.0
+  enable_false_detection: true
+  chi2_threshold: 16.27
