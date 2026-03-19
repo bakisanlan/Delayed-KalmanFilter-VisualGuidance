@@ -2,3 +2,8 @@
 /eskf_cpp/build
 /eskf_cpp/out
 *.pyc
+/eskf_cpp_reduced/build/CMakeFiles/3.19.7
+/eskf_cpp_reduced/build/CMakeFiles
+/eskf_cpp_reduced/build_ros2/ament_cmake_core/stamps
+/eskf_cpp_reduced/build_ros2/ament_cmake_uninstall_target
+/eskf_cpp_reduced/build_ros2

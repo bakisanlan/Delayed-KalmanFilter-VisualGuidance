@@ -1,0 +1,64 @@
+topics:
+  imu: "/mavros/imu/data_raw"
+  image: "/yolo/target"
+  radar: "/radar/target_odom"
+  interceptor_odom: "/mavros/global_position/local"
+  output_state: "/eskf_reduced/odom"
+  output_pose: "/eskf_reduced/pbar"
+
+timing:
+  imu_rate_hz: 200
+  eskf_rate_hz: 200
+  image_delay_ms: 0
+  image_timeout_sec: 2.0
+
+imu_noise:
+  sigma_a_n: 0.19953898572
+  sigma_omega_n: 0.007733389
+  sigma_a_w: 0.00024348074
+  sigma_omega_w: 0.00001557916
+
+measurement_noise:
+  image_sigma: 0.03
+  radar_sigma_pos: 10.0
+  radar_sigma_vel: 0.5
+
+radar:
+  use_vr: false
+  measurement_is_relative: false
+
+reduced_filter:
+  target_rw_sigma: 1.5
+
+initial_covariance:
+  position: 5.0
+  velocity: 1.0
+  pbar: 0.05
+  attitude: 0.05
+  gyro_bias: 0.005
+  accel_bias: 0.05
+
+camera:
+  R_b2c: [0, 1, 0,
+          0, 0, 1,
+          1, 0, 0]
+
+constants:
+  gravity: 9.8065
+
+history:
+  buffer_length: 25
+
+chi2_gating:
+  enable_false_detection_image: true
+  enable_false_detection_radar: true
+  image_threshold: 18.42
+  radar_threshold: 16.27
+
+logging:
+  enable: false
+  rate_hz: 50.0
+  file_path: "log/eskf_reduced_log.csv"
+
+magnetometer:
+  enable: false

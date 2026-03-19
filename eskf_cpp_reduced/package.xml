@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>eskf_cpp_reduced</name>
+  <version>1.0.0</version>
+  <description>
+    Reduced-state Error-State Kalman Filter for target tracking with delayed image updates.
+    This package estimates target position, target velocity, and pbar while using interceptor
+    odometry and IMU data as external inputs.
+  </description>
+
+  <maintainer email="todo@todo.invalid">b_san</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <build_depend>eigen3_cmake_module</build_depend>
+  <depend>eigen</depend>
+  <depend>yaml-cpp</depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
