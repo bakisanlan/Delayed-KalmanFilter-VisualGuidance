@@ -293,11 +293,6 @@ inline ProcessNoise computeDiscreteProcessNoise(const ESKFParams& params) {
     Qd.block<3,3>(noise_idx::A_W_START, noise_idx::A_W_START) = 
         a_i * Eigen::Matrix3d::Identity();
     
-    // M_i: Mag bias random walk covariance (indices 12-14)
-    const double m_i = params.sigma_mag_w * params.sigma_mag_w * dt;
-    Qd.block<3,3>(noise_idx::MAG_W_START, noise_idx::MAG_W_START) = 
-        m_i * Eigen::Matrix3d::Identity();
-    
     return Qd;
 }
 

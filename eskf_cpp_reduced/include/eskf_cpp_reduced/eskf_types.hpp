@@ -230,7 +230,6 @@ struct StateHistoryEntry {
 struct ESKFParams {
     // Topic names (ROS2)
     std::string topic_imu = "/mavros/imu/data_raw";    ///< IMU topic
-    std::string topic_mag = "/mavros/imu/mag";          ///< Magnetometer topic
     std::string topic_image = "/yolo/target";           ///< Image feature topic
     std::string topic_radar = "/radar/target_odom";    ///< Radar target-state odometry topic
     std::string topic_interceptor_odom = "/mavros/global_position/local";  ///< Interceptor odometry: pose in ENU/FLU, linear velocity in local ENU
@@ -286,23 +285,10 @@ struct ESKFParams {
     // Physical constants
     double gravity = 9.81;               ///< Gravity magnitude [m/s²]
     
-    // ZUPT (Zero Velocity Update) parameters
-    double zupt_alpha = 1.0;             ///< Noise inflation for ZUPT chi-square test
-    double chi2_threshold_zupt = 12.59;   ///< 6 DoF, 95% confidence (chi2inv(0.95, 6))
-    
     // Data Logging parameters
     bool log_enabled = false;             ///< Enable CSV logging of state and covariance
     double log_rate_hz = 20.0;            ///< Logging rate [Hz]
     std::string log_file_path = "log/eskf_log.csv";  ///< Output file path
-    
-    // Magnetometer parameters (NORMALIZED - using unit vectors)
-    bool enable_mag = true;              ///< Enable/disable magnetometer correction
-    Vector3d B_ned = Vector3d(0.5097, 0.0541, 0.8545);  ///< Reference field direction in NED (unit vector)
-    double sigma_mag_n = 0.10;           ///< Mag measurement noise (dimensionless)
-    double sigma_mag_w = 0.0002;         ///< Mag bias random walk [1/√s]
-    double init_sigma_bmag = 1.0;        ///< Initial mag bias uncertainty (dimensionless)
-    bool enable_false_detection_mag = true;   ///< Enable chi-square gating for magnetometer
-    double chi2_threshold_mag = 16.27;   ///< 3 DoF, 99.99% confidence (chi2inv(0.9999, 3))
 };
 
 // ============================================================================

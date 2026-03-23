@@ -152,6 +152,8 @@ Vector2d ReducedErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
     if (params_.enable_false_detection_image && d_mahal_sq > params_.chi2_threshold_image) {
         PRINT_WARNING(YELLOW "[IMAGE-RED]: False detection rejected (Mahalanobis d^2=%.2f > %.2f)" RESET "\n",
                       d_mahal_sq, params_.chi2_threshold_image)
+        PRINT_WARNING(YELLOW "             Innovation pbar=[%.4f, %.4f]" RESET "\n",
+                      innovation(0), innovation(1))
         return Vector2d::Zero();
     }
 
@@ -193,6 +195,9 @@ RadarMeasurement ReducedErrorStateKalmanFilter::correctRadar(const RadarMeasurem
         if (params_.enable_false_detection_radar && d_mahal_sq > params_.chi2_threshold_radar) {
             PRINT_WARNING(YELLOW "[RADAR-RED]: False detection rejected (Mahalanobis d^2=%.2f > %.2f)" RESET "\n",
                           d_mahal_sq, params_.chi2_threshold_radar)
+            PRINT_WARNING(YELLOW "             Innovation pos=[%.2f, %.2f, %.2f] vel=[%.2f, %.2f, %.2f]" RESET "\n",
+                          innovation(0), innovation(1), innovation(2),
+                          innovation(3), innovation(4), innovation(5))
             return RadarMeasurement::Zero();
         }
 
@@ -221,6 +226,8 @@ RadarMeasurement ReducedErrorStateKalmanFilter::correctRadar(const RadarMeasurem
     if (params_.enable_false_detection_radar && d_mahal_sq > chi2_threshold_3dof) {
         PRINT_WARNING(YELLOW "[RADAR-RED]: False detection rejected (Mahalanobis d^2=%.2f > %.2f)" RESET "\n",
                       d_mahal_sq, chi2_threshold_3dof)
+        PRINT_WARNING(YELLOW "             Innovation pos=[%.2f, %.2f, %.2f]" RESET "\n",
+                      innovation_pos(0), innovation_pos(1), innovation_pos(2))
         return RadarMeasurement::Zero();
     }
 

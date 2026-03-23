@@ -1,8 +1,8 @@
 topics:
-  imu: "/mavros/imu/data_raw"
-  image: "/yolo/target"
-  radar: "/radar/target_odom"
-  interceptor_odom: "/mavros/global_position/local"
+  imu: "/interceptor/imu/data_raw"
+  image: "/interceptor/camera/target_pbar"
+  radar: "/radar/emulated_measurement"
+  interceptor_odom: "/interceptor/global_position/local"
   output_state: "/eskf_reduced/odom"
   output_pose: "/eskf_reduced/pbar"
 
@@ -19,12 +19,12 @@ imu_noise:
   sigma_omega_w: 0.00001557916
 
 measurement_noise:
-  image_sigma: 0.03
+  image_sigma: 0.003
   radar_sigma_pos: 10.0
   radar_sigma_vel: 0.5
 
 radar:
-  use_vr: false
+  use_vr: true  #velocity measurement
   measurement_is_relative: false
 
 reduced_filter:

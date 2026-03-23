@@ -126,4 +126,10 @@ def measure(
     # 6. Add realistic pixel noise
     u, v = camera.add_noise(u, v)
 
-    return (u, v)
+    # Calculate pbars, normalized image coordinage
+    pbars = np.array([
+        (u - camera.cx) / camera.fx,
+        (v - camera.cy) / camera.fy,
+    ])
+
+    return (pbars[0], pbars[1])

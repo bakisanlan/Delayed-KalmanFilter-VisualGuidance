@@ -1,8 +1,8 @@
 topics:
-  imu: "/mavros/imu/data_raw"
+  imu: "/interceptor/imu/data"
   image: "/yolo/target"
-  radar: "/radar/target_odom"
-  interceptor_odom: "/mavros/global_position/local"
+  radar: "/radar/emulated_measurement"
+  interceptor_odom: "/interceptor/global_position/local"
   output_state: "/eskf_reduced/odom"
   output_pose: "/eskf_reduced/pbar"
 

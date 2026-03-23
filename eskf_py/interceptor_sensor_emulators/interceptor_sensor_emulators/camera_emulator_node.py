@@ -6,12 +6,13 @@ publishes the target's projected pixel coordinates at a configurable rate.
 """
 
 import numpy as np
+import cv2
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from sensor_msgs.msg import NavSatFix
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, Point
 from nav_msgs.msg import Odometry
 
 from .camera_model import PinholeRadtanCamera
@@ -36,6 +37,7 @@ class CameraEmulatorNode(Node):
         self.declare_parameter('dist_coeffs', [-0.1, 0.01, 0.0, 0.0])
         self.declare_parameter('noise_sigma', 1.5)
         self.declare_parameter('rate_hz', 30.0)
+        self.declare_parameter('visualize_target', False)
 
         # Topic names (easy to remap later)
         self.declare_parameter('interceptor_lla_topic',
@@ -46,6 +48,8 @@ class CameraEmulatorNode(Node):
                                '/interceptor/global_position/local')
         self.declare_parameter('target_pixel_topic',
                                '/interceptor/camera/target_pixel')
+        self.declare_parameter('eskf_pbar_topic',
+                               '/eskf_reduced/pbar')
 
         # ------------------------------------------------------------------ #
         # Read parameters
@@ -59,11 +63,13 @@ class CameraEmulatorNode(Node):
         dist_coeffs = self.get_parameter('dist_coeffs').value
         noise_sigma = self.get_parameter('noise_sigma').value
         rate_hz = self.get_parameter('rate_hz').value
+        self.visualize_target = self.get_parameter('visualize_target').value
 
         interceptor_lla_topic = self.get_parameter('interceptor_lla_topic').value
         target_lla_topic = self.get_parameter('target_lla_topic').value
         interceptor_local_odom_topic = self.get_parameter('interceptor_local_odom_topic').value
         target_pixel_topic = self.get_parameter('target_pixel_topic').value
+        eskf_pbar_topic = self.get_parameter('eskf_pbar_topic').value
 
         # ------------------------------------------------------------------ #
         # Build camera model
@@ -104,6 +110,7 @@ class CameraEmulatorNode(Node):
         self._interceptor_lla = None  # (lat, lon, alt)
         self._target_lla = None       # (lat, lon, alt)
         self._R_body2ned = None       # 3×3
+        self._eskf_pbar = None        # (px, py)
 
         # ------------------------------------------------------------------ #
         # QoS – best-effort for high-rate sensor data
@@ -126,12 +133,16 @@ class CameraEmulatorNode(Node):
         self.create_subscription(
             Odometry, interceptor_local_odom_topic,
             self._interceptor_local_odom_cb, sensor_qos)
+        self.create_subscription(
+            Point, eskf_pbar_topic,
+            self._eskf_pbar_cb, 10)
 
         self.get_logger().info(
             f'Subscribed to:\n'
             f'  interceptor LLA : {interceptor_lla_topic}\n'
             f'  target LLA      : {target_lla_topic}\n'
-            f'  interceptor odom: {interceptor_local_odom_topic}'
+            f'  interceptor odom: {interceptor_local_odom_topic}\n'
+            f'  ESKF pbar       : {eskf_pbar_topic}'
         )
 
         # ------------------------------------------------------------------ #
@@ -139,7 +150,7 @@ class CameraEmulatorNode(Node):
         # ------------------------------------------------------------------ #
         self.pixel_pub = self.create_publisher(
             PointStamped, target_pixel_topic, 10)
-        self.get_logger().info(f'Publishing target pixel on: {target_pixel_topic}')
+        self.get_logger().info(f'Publishing target pbar on: {target_pixel_topic}')
 
         # ------------------------------------------------------------------ #
         # Timer
@@ -167,7 +178,11 @@ class CameraEmulatorNode(Node):
             q.x, q.y, q.z, q.w,
         )
 
+    def _eskf_pbar_cb(self, msg: Point):
+        self._eskf_pbar = (msg.x, msg.y)
+
     def _timer_cb(self):
+    
         # Wait for all inputs
         if self._interceptor_lla is None:
             return
@@ -175,6 +190,7 @@ class CameraEmulatorNode(Node):
             return
         if self._R_body2ned is None:
             return
+
 
         # Compute pixel
         result = measure(
@@ -188,16 +204,43 @@ class CameraEmulatorNode(Node):
             # Target not in FOV – do not publish
             return
 
-        u, v = result
+        pbar_x, pbar_y = result
 
         # Publish
         msg = PointStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'camera'
-        msg.point.x = u
-        msg.point.y = v
+        msg.point.x = pbar_x
+        msg.point.y = pbar_y
         msg.point.z = 0.0  # unused, reserved for future (e.g. confidence)
         self.pixel_pub.publish(msg)
+
+        if self.visualize_target:
+
+
+            img = np.zeros((self.camera.image_height, self.camera.image_width, 3), dtype=np.uint8)
+            
+            # Map normalized coordinates back to pixels for OpenCV drawing
+            u_pixel = int(pbar_x * self.camera.fx + self.camera.cx)
+            v_pixel = int(pbar_y * self.camera.fy + self.camera.cy)
+            center = (u_pixel, v_pixel)
+            
+            cv2.circle(img, center, 5, (0, 0, 255), -1) # Red circle
+            cv2.line(img, (center[0] - 15, center[1]), (center[0] + 15, center[1]), (0, 255, 0), 1) # Green crosshair
+            cv2.line(img, (center[0], center[1] - 15), (center[0], center[1] + 15), (0, 255, 0), 1)
+            
+            # Plot Estimated pbar from ESKF
+            if self._eskf_pbar is not None:
+                est_pbar_x, est_pbar_y = self._eskf_pbar
+                est_u_pixel = int(est_pbar_x * self.camera.fx + self.camera.cx)
+                est_v_pixel = int(est_pbar_y * self.camera.fy + self.camera.cy)
+                est_center = (est_u_pixel, est_v_pixel)
+                
+                cv2.circle(img, est_center, 5, (255, 0, 0), -1) # Blue circle
+                cv2.line(img, (est_center[0] - 15, est_center[1]), (est_center[0] + 15, est_center[1]), (255, 255, 0), 1) # Cyan crosshair
+                
+            cv2.imshow("Camera Emulator Target", img)
+            cv2.waitKey(1)
 
 
 # ---------------------------------------------------------------------- #

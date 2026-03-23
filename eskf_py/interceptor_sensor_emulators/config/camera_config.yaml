@@ -1,17 +1,18 @@
 camera_emulator_node:
   ros__parameters:
     # ----- Image sensor -----
-    image_width: 640
-    image_height: 480
+    image_width: 960
+    image_height: 540
 
+    # 4mm
     # ----- Intrinsic matrix (pinhole) -----
-    fx: 320.0
-    fy: 320.0
-    cx: 320.0
-    cy: 240.0
+    fx: 629.8477
+    fy: 629.7639
+    cx: 492.1117
+    cy: 277.6097
 
     # ----- Radtan distortion [k1, k2, p1, p2] -----
-    dist_coeffs: [-0.1, 0.01, 0.0, 0.0]
+    dist_coeffs: [0.03458671, -0.15489642, -0.00036472, 0.00026632]
 
     # ----- Noise -----
     noise_sigma: 1.5  # Gaussian pixel noise std-dev (pixels)
@@ -19,8 +20,11 @@ camera_emulator_node:
     # ----- Rate -----
     rate_hz: 30.0
 
+    # ----- Visualization -----
+    visualize_target: true
+
     # ----- Topics (override via launch or CLI) -----
-    interceptor_lla_topic: /interceptor/mavros/global_position/global
-    target_lla_topic: /target/mavros/global_position/global
-    interceptor_local_odom_topic: /interceptor/mavros/global_position/local
-    target_pixel_topic: /interceptor/camera/target_pixel
+    interceptor_lla_topic: /interceptor/global_position/global
+    target_lla_topic: /target/global_position/global
+    interceptor_local_odom_topic: /interceptor/global_position/local
+    target_pixel_topic: /interceptor/camera/target_pbar

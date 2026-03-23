@@ -8,6 +8,7 @@
 #include "eskf_cpp_reduced/utils/print.hpp"
 
 #include <geometry_msgs/msg/point.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -84,7 +85,7 @@ public:
         this->declare_parameter("config_file", "");
         this->declare_parameter("print_level", "INFO");
 
-        Printer::setPrintLevel(this->get_parameter("print_level").as_string());
+        eskf::Printer::setPrintLevel(this->get_parameter("print_level").as_string());
 
         const std::string config_file = this->get_parameter("config_file").as_string();
         if (!config_file.empty()) {
@@ -106,7 +107,7 @@ public:
             params_.topic_imu, imu_qos,
             std::bind(&ReducedESKFNode::imuCallback, this, std::placeholders::_1));
 
-        image_sub_ = this->create_subscription<geometry_msgs::msg::Point>(
+        image_sub_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
             params_.topic_image, 10,
             std::bind(&ReducedESKFNode::imageCallback, this, std::placeholders::_1));
 
@@ -115,7 +116,7 @@ public:
             std::bind(&ReducedESKFNode::radarCallback, this, std::placeholders::_1));
 
         interceptor_odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            params_.topic_interceptor_odom, 10,
+            params_.topic_interceptor_odom, imu_qos,
             std::bind(&ReducedESKFNode::interceptorOdomCallback, this, std::placeholders::_1));
 
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>(params_.topic_odom, 10);
@@ -139,8 +140,7 @@ public:
 
 private:
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
-        // /mavros/global_position/local does not provide trustworthy angular rates,
-        // so the reduced filter keeps using the raw IMU gyro for omega.
+        // so the reduced filter keeps using the IMU gyro for omega.
         const eskf::Vector3d omega_flu(
             msg->angular_velocity.x,
             msg->angular_velocity.y,
@@ -174,7 +174,11 @@ private:
         }
     }
 
-    void imageCallback(const geometry_msgs::msg::Point::SharedPtr msg) {
+    void imageCallback(const geometry_msgs::msg::PointStamped::SharedPtr msg) {
+
+        //debug
+        PRINT_INFO(GREEN "[IMAGE-RED]: Image received" RESET "\n")
+
         if (!is_initialized_) {
             return;
         }
@@ -184,7 +188,7 @@ private:
         }
 
         last_image_time_ = this->now().seconds();
-        const eskf::Vector2d z_pbar(msg->x, msg->y);
+        const eskf::Vector2d z_pbar(msg->point.x, msg->point.y);
         const eskf::Vector2d innovation = filter_->correctImage(z_pbar, delay_steps_);
 
         static int image_log_counter = 0;
@@ -211,6 +215,11 @@ private:
             PRINT_WARNING(YELLOW "[RADAR-RED]: Radar received before interceptor odometry; waiting..." RESET "\n")
             return;
         }
+
+        // print debug for radar measurement
+        PRINT_DEBUG(BLUE "[RADAR-RED]: Radar measurement pos=[%.3f, %.3f, %.3f] vel=[%.3f, %.3f, %.3f]" RESET "\n",
+                    pending_radar_measurement_(0), pending_radar_measurement_(1), pending_radar_measurement_(2),
+                    pending_radar_measurement_(3), pending_radar_measurement_(4), pending_radar_measurement_(5))
 
         const eskf::reduced::RadarMeasurement target_state =
             computeTargetStateMeasurement(pending_radar_measurement_);
@@ -294,7 +303,7 @@ private:
         eskf::reduced::NominalState x_init = eskf::reduced::NominalState::Zero();
         x_init.segment<3>(eskf::reduced::nominal_idx::PT_START) = z_target.head<3>();
         x_init.segment<3>(eskf::reduced::nominal_idx::VT_START) =
-            params_.use_vr ? z_target.tail<3>() : eskf::Vector3d::Zero();
+            params_.use_vr ? eskf::Vector3d(z_target.tail<3>()) : eskf::Vector3d::Zero();
         x_init.segment<2>(eskf::reduced::nominal_idx::PBAR_START).setZero();
 
         eskf::reduced::ErrorCovariance P_init = filter_->getCovariance();
@@ -412,7 +421,7 @@ private:
     std::unique_ptr<eskf::reduced::ReducedErrorStateKalmanFilter> filter_;
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr image_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr image_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr radar_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr interceptor_odom_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
