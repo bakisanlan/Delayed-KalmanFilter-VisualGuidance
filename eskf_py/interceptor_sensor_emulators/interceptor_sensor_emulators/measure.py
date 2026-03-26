@@ -71,39 +71,33 @@ def measure(
     interceptor_lla: Tuple[float, float, float],
     target_lla: Tuple[float, float, float],
     R_body2ned: np.ndarray,
-) -> Optional[Tuple[float, float]]:
+    max_range: float = 100.0,
+    false_detection_prob: float = 0.0,
+    dropout_prob_at_max_range: float = 0.0,
+) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
     """
     Compute the target pixel location as seen by the interceptor's camera.
 
-    Pipeline
-    --------
-    1. Target LLA → NED relative to interceptor LLA.
-    2. NED → body frame  :  p_body = R_body2ned^T  @ p_ned
-    3. Body → camera     :  p_cam  = R_c2b^T       @ p_body
-    4. Project p_cam → pixel (u, v) with radtan distortion.
-    5. Check FOV; add noise.
-
-    Parameters
-    ----------
-    camera : PinholeRadtanCamera
-        The camera model instance.
-    interceptor_lla : (lat_deg, lon_deg, alt_m)
-        Interceptor position in geodetic coordinates.
-    target_lla : (lat_deg, lon_deg, alt_m)
-        Target position in geodetic coordinates.
-    R_body2ned : np.ndarray, shape (3, 3)
-        Rotation matrix from body frame to NED frame.
+    Includes emulation of:
+    - Maximal range limitation
+    - Distance-dependent dropout
+    - False detections in the FOV
 
     Returns
     -------
-    (u, v) : tuple of float, or None
-        Noisy pixel coordinates if target is in FOV, else ``None``.
+    (pbar_meas, pbar_true) : 
+        pbar_meas: Noisy/imperfect pixel coordinates if detected (or randomly generated), else None.
+        pbar_true: Perfect target coordinates if mathematically inside the FOV, else None.
     """
+    pbar_true = None
+    pbar_meas = None
+
     # 1. Target position in NED (relative to interceptor)
     p_ned = lla_to_ned(
         target_lla[0], target_lla[1], target_lla[2],
         interceptor_lla[0], interceptor_lla[1], interceptor_lla[2],
     )
+    dist = np.linalg.norm(p_ned)
 
     # 2. NED → body frame
     R_ned2body = R_body2ned.T
@@ -114,22 +108,30 @@ def measure(
 
     # 4. Project to pixel
     result = camera.project(p_cam)
-    if result is None:
-        return None  # Behind camera
+    if result is not None:
+        u_true, v_true = result
+        
+        # 5. FOV check for the True Location
+        if camera.is_in_fov(u_true, v_true):
+            pbar_true = ((u_true - camera.cx) / camera.fx,
+                         (v_true - camera.cy) / camera.fy)
 
-    u, v = result
+            # --- Evaluate Perfect Emulation Physical Limits ---
+            # Max range limitation & distance-dependent discontinuity
+            if dist <= max_range:
+                p_drop = dropout_prob_at_max_range * (dist / max_range)
+                if np.random.rand() > p_drop:
+                    # 6. Add realistic pixel noise
+                    u_noisy, v_noisy = camera.add_noise(u_true, v_true)
+                    pbar_meas = ((u_noisy - camera.cx) / camera.fx,
+                                 (v_noisy - camera.cy) / camera.fy)
 
-    # 5. FOV check
-    if not camera.is_in_fov(u, v):
-        return None
+    # --- Evaluate False Detections (happens independently of target) ---
+    if np.random.rand() < false_detection_prob:
+        # Generate random coordinates safely within the FOV
+        u_fd = np.random.uniform(0, camera.image_width)
+        v_fd = np.random.uniform(0, camera.image_height)
+        pbar_meas = ((u_fd - camera.cx) / camera.fx,
+                     (v_fd - camera.cy) / camera.fy)
 
-    # 6. Add realistic pixel noise
-    u, v = camera.add_noise(u, v)
-
-    # Calculate pbars, normalized image coordinage
-    pbars = np.array([
-        (u - camera.cx) / camera.fx,
-        (v - camera.cy) / camera.fy,
-    ])
-
-    return (pbars[0], pbars[1])
+    return (pbar_meas, pbar_true)

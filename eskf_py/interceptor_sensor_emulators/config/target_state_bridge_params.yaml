@@ -6,3 +6,4 @@
     publish_rate: 10.0
     velocity_frame: "enu"
     max_state_age_sec: 1.0
+    log_dir: "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/target_bridge"

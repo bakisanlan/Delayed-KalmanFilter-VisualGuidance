@@ -6,8 +6,12 @@ ROS2 node wrapper around the Python RadarEmulator.
 
 from __future__ import annotations
 
+import csv
+import datetime
+import glob
 import json
 import math
+import os
 import pathlib
 import re
 import sys
@@ -15,7 +19,7 @@ import sys
 import numpy as np
 import rclpy
 import yaml
-from mavros_msgs.msg import HomePosition
+from mavros_msgs.msg import HomePosition, State
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import (
@@ -29,8 +33,8 @@ from std_msgs.msg import String
 if __package__ in (None, ''):
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from eskf_py.geodesy import NEDFrame
-from eskf_py.radar_emulator import RadarEmulator
+from .geo_utils import lla_to_ned
+from .radar_emulator import RadarEmulator
 
 
 class RadarEmulatorNode(Node):
@@ -47,7 +51,7 @@ class RadarEmulatorNode(Node):
 
     @staticmethod
     def _default_config_path() -> pathlib.Path:
-        return pathlib.Path(__file__).resolve().parent / 'config' / 'radar_emulator_params.yaml'
+        return pathlib.Path(__file__).resolve().parent.parent / 'config' / 'radar_emulator_params.yaml'
 
     @classmethod
     def _load_yaml_params(cls, config_path: pathlib.Path) -> dict:
@@ -76,6 +80,9 @@ class RadarEmulatorNode(Node):
         self.declare_parameter(
             'target_state_topic',
             self._yaml_params.get('target_state_topic', '/target/telemetry/state'))
+        self.declare_parameter(
+            'state_topic',
+            self._yaml_params.get('state_topic', '/interceptor/state'))
         self.declare_parameter(
             'home_position_topic',
             self._yaml_params.get('home_position_topic', '/mavros/home_position/home'))
@@ -115,8 +122,12 @@ class RadarEmulatorNode(Node):
         self.declare_parameter(
             'random_seed',
             self._yaml_params.get('random_seed', -1))
+        self.declare_parameter(
+            'log_dir',
+            self._yaml_params.get('log_dir', 'log/radar'))
 
         self._target_state_topic = self.get_parameter('target_state_topic').value
+        self._state_topic = str(self.get_parameter('state_topic').value)
         self._home_position_topic = self.get_parameter('home_position_topic').value
         self._odom_topic = self.get_parameter('odom_topic').value
         self._frame_id = self.get_parameter('frame_id').value
@@ -138,7 +149,6 @@ class RadarEmulatorNode(Node):
 
         self._rng = np.random.default_rng(None if self._seed < 0 else self._seed)
         self._ref_lla0: np.ndarray | None = None
-        self._ref_frame: NEDFrame | None = None
         self._emulator: RadarEmulator | None = None
         self._target_lla: np.ndarray | None = None
         self._target_vel_ned: np.ndarray | None = None
@@ -146,6 +156,13 @@ class RadarEmulatorNode(Node):
         self._prev_target_update_time: float | None = None
         self._last_target_update_time: float | None = None
         self._warn_timestamps: dict[str, float] = {}
+
+        self._is_armed = False
+        self._csv_file = None
+        self._csv_writer = None
+        self._log_dir = str(self.get_parameter('log_dir').value)
+        self._txt_log_file = None
+        self._setup_txt_logging()
 
         reliable_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -165,20 +182,69 @@ class RadarEmulatorNode(Node):
             self._target_state_callback,
             reliable_qos,
         )
+        self._state_sub = self.create_subscription(
+            State,
+            self._state_topic,
+            self._state_callback,
+            reliable_qos,
+        )
         self._odom_pub = self.create_publisher(Odometry, self._odom_topic, reliable_qos)
         self._timer = self.create_timer(self._dt, self._publish_measurement)
 
-        self.get_logger().info(
+    def _setup_txt_logging(self):
+        try:
+            os.makedirs(self._log_dir, exist_ok=True)
+            existing_files = glob.glob(os.path.join(self._log_dir, '*-*.log'))
+            max_count = 0
+            for f in existing_files:
+                basename = os.path.basename(f)
+                parts = basename.split('-')
+                if len(parts) >= 2 and parts[0].isdigit():
+                    max_count = max(max_count, int(parts[0]))
+            
+            next_count = max_count + 1
+            now_str = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{next_count:04d}-{now_str}.log"
+            filepath = os.path.join(self._log_dir, filename)
+            
+            self._txt_log_file = open(filepath, 'w')
+            self._log_info(f"Text logging initialized at {filepath}")
+        except Exception as e:
+            self.get_logger().error(f"[RADAR LOG]: Failed to start text logging: {e}")
+            self._txt_log_file = None
+
+    def _write_txt_log(self, msg: str):
+        if self._txt_log_file is not None:
+            try:
+                self._txt_log_file.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
+                self._txt_log_file.flush()
+            except Exception:
+                pass
+
+    def _log_info(self, msg: str):
+        self.get_logger().info(msg)
+        self._write_txt_log(f"[INFO] {msg}")
+
+    def _log_warning(self, msg: str):
+        self.get_logger().warning(msg)
+        self._write_txt_log(f"[WARNING] {msg}")
+
+    def _log_error(self, msg: str):
+        self.get_logger().error(msg)
+        self._write_txt_log(f"[ERROR] {msg}")
+
+        self._log_info(
             "[RADAR]: Node initialized\n"
             f"  config_file: {self._config_path}\n"
             f"  home_position_topic: {self._home_position_topic}\n"
             f"  target_state_topic: {self._target_state_topic}\n"
+            f"  state_topic: {self._state_topic}\n"
             f"  odom_topic: {self._odom_topic}\n"
             f"  dt: {self._dt:.3f} s\n"
             f"  velocity_source: {self._velocity_source}\n"
             f"  radar_lla: {self._radar_lla.tolist()}"
         )
-        self.get_logger().warning("[RADAR]: Waiting for /mavros/home_position/home before creating RadarEmulator")
+        self._log_warning("[RADAR]: Waiting for /mavros/home_position/home before creating RadarEmulator")
 
     def _create_emulator(self):
         if self._ref_lla0 is None:
@@ -194,7 +260,6 @@ class RadarEmulatorNode(Node):
             rmse_doppler=self._noise_params['rmse_doppler'],
             rng=self._rng,
         )
-        self._ref_frame = NEDFrame(self._ref_lla0)
 
     def home_position_callback(self, msg: HomePosition):
         ref_lla0 = np.array([
@@ -212,13 +277,62 @@ class RadarEmulatorNode(Node):
         self._target_vel_ned = None
 
         if ref_changed:
-            self.get_logger().warning(
+            self._log_warning(
                 f"[RADAR]: Home position changed. Recreated emulator with ref_lla0={self._ref_lla0.tolist()}"
             )
         else:
-            self.get_logger().info(
+            self._log_info(
                 f"[RADAR]: Home position received. ref_lla0={self._ref_lla0.tolist()}"
             )
+
+    def _state_callback(self, msg: State):
+        if msg.armed and not self._is_armed:
+            self._is_armed = True
+            self._start_logging()
+        elif not msg.armed and self._is_armed:
+            self._is_armed = False
+            self._stop_logging()
+
+    def _start_logging(self):
+        try:
+            os.makedirs(self._log_dir, exist_ok=True)
+            existing_files = glob.glob(os.path.join(self._log_dir, '*-*.csv'))
+            max_count = 0
+            for f in existing_files:
+                basename = os.path.basename(f)
+                parts = basename.split('-')
+                if len(parts) >= 2 and parts[0].isdigit():
+                    max_count = max(max_count, int(parts[0]))
+            
+            next_count = max_count + 1
+            now_str = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{next_count:04d}-{now_str}.csv"
+            filepath = os.path.join(self._log_dir, filename)
+            
+            self._csv_file = open(filepath, 'w', newline='')
+            self._csv_writer = csv.writer(self._csv_file)
+            self._csv_writer.writerow([
+                'timestamp',
+                'truth_pos_n', 'truth_pos_e', 'truth_pos_d',
+                'truth_vel_n', 'truth_vel_e', 'truth_vel_d',
+                'meas_pos_n', 'meas_pos_e', 'meas_pos_d',
+                'meas_vel_n', 'meas_vel_e', 'meas_vel_d'
+            ])
+            self._log_info(f"[RADAR LOG]: Started logging to {filepath}")
+        except Exception as e:
+            self._log_error(f"[RADAR LOG]: Failed to start logging: {e}")
+            self._csv_file = None
+            self._csv_writer = None
+
+    def _stop_logging(self):
+        if self._csv_file is not None:
+            try:
+                self._csv_file.close()
+                self._log_info("[RADAR LOG]: Stopped logging")
+            except Exception as e:
+                self._log_error(f"[RADAR LOG]: Failed to close log file: {e}")
+            self._csv_file = None
+            self._csv_writer = None
 
     def _now_sec(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
@@ -227,7 +341,7 @@ class RadarEmulatorNode(Node):
         now = self._now_sec()
         if now - self._warn_timestamps.get(key, -float('inf')) >= interval:
             self._warn_timestamps[key] = now
-            self.get_logger().warning(message)
+            self._log_warning(message)
 
     def _extract_numeric(self, raw: str, aliases) -> float | None:
         for alias in aliases:
@@ -271,7 +385,7 @@ class RadarEmulatorNode(Node):
         return np.array([lat, lon, alt], dtype=float), reported_vel
 
     def _estimate_velocity(self, target_lla: np.ndarray, now_sec: float) -> np.ndarray | None:
-        if self._ref_frame is None:
+        if self._ref_lla0 is None:
             return None
         if self._prev_target_lla is None or self._prev_target_update_time is None:
             return None
@@ -280,8 +394,14 @@ class RadarEmulatorNode(Node):
         if dt_obs <= 1e-3:
             return None
 
-        prev_ned = self._ref_frame.lla_to_ned(self._prev_target_lla)
-        curr_ned = self._ref_frame.lla_to_ned(target_lla)
+        prev_ned = lla_to_ned(
+            self._prev_target_lla[0], self._prev_target_lla[1], self._prev_target_lla[2],
+            self._ref_lla0[0], self._ref_lla0[1], self._ref_lla0[2]
+        )
+        curr_ned = lla_to_ned(
+            target_lla[0], target_lla[1], target_lla[2],
+            self._ref_lla0[0], self._ref_lla0[1], self._ref_lla0[2]
+        )
         return (curr_ned - prev_ned) / dt_obs
 
     def _select_velocity(
@@ -379,9 +499,27 @@ class RadarEmulatorNode(Node):
         msg.pose.covariance = pose_cov.flatten().tolist()
         msg.twist.covariance = twist_cov.flatten().tolist()
 
-        self.get_logger().info(
+        self._log_info(
             f"Publishing radar measurement: pos_ned0={pos_ned0}, vel_ned0={vel_ned0}"
         )
+
+        if self._csv_writer is not None and self._ref_lla0 is not None:
+            truth_pos_ned = lla_to_ned(
+                self._target_lla[0], self._target_lla[1], self._target_lla[2],
+                self._ref_lla0[0], self._ref_lla0[1], self._ref_lla0[2]
+            )
+            truth_vel_ned = self._target_vel_ned
+            try:
+                self._csv_writer.writerow([
+                    self._now_sec(),
+                    truth_pos_ned[0], truth_pos_ned[1], truth_pos_ned[2],
+                    truth_vel_ned[0], truth_vel_ned[1], truth_vel_ned[2],
+                    pos_ned0[0], pos_ned0[1], pos_ned0[2],
+                    vel_ned0[0], vel_ned0[1], vel_ned0[2]
+                ])
+                self._csv_file.flush()
+            except Exception as e:
+                self._warn_throttled('csv_write', f"Failed to write to CSV log: {e}")
         
 
         self._odom_pub.publish(msg)
@@ -395,6 +533,11 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        if node._txt_log_file is not None:
+            try:
+                node._txt_log_file.close()
+            except Exception:
+                pass
         node.destroy_node()
         rclpy.shutdown()
 

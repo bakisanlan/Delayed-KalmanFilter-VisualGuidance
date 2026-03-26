@@ -27,6 +27,9 @@ setup(
     entry_points={
         'console_scripts': [
             'camera_emulator_node = interceptor_sensor_emulators.camera_emulator_node:main',
+            'radar_emulator_node = interceptor_sensor_emulators.radar_emulator_node:main',
+            'target_state_bridge = interceptor_sensor_emulators.target_state_bridge:main',
+            'visualization_node = interceptor_sensor_emulators.visualization_node:main',
         ],
     },
 )

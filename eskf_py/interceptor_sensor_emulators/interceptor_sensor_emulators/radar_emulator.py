@@ -15,7 +15,7 @@ import numpy as np
 if __package__ in (None, ''):
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from eskf_py.geodesy import NEDFrame
+from .geo_utils import lla_to_ned, ecef_to_ned, ned_to_ecef
 
 
 class RadarEmulator:
@@ -40,8 +40,6 @@ class RadarEmulator:
         self.ref_lla0 = np.asarray(ref_lla0, dtype=float).reshape(3)
         self.dt = float(dt)
         self._rng = rng if rng is not None else np.random.default_rng()
-        self._radar_frame = NEDFrame(self.radar_lla)
-        self._ref_frame = NEDFrame(self.ref_lla0)
 
         if self.dt <= 0.0:
             raise ValueError("dt must be positive.")
@@ -59,7 +57,10 @@ class RadarEmulator:
         target_lla = np.asarray(target_lla, dtype=float).reshape(3)
         target_vel_ned = np.asarray(target_vel_ned, dtype=float).reshape(3)
 
-        p_true_radar = self._radar_frame.lla_to_ned(target_lla)
+        p_true_radar = lla_to_ned(
+            target_lla[0], target_lla[1], target_lla[2],
+            self.radar_lla[0], self.radar_lla[1], self.radar_lla[2]
+        )
         r_true = float(np.linalg.norm(p_true_radar))
         if r_true <= 1e-3:
             raise ValueError("Target and radar are effectively co-located.")
@@ -85,8 +86,14 @@ class RadarEmulator:
         x_d_m = -r_m * math.sin(phi_m)
         p_noisy_ned_radar = np.array([x_n_m, x_e_m, x_d_m], dtype=float)
 
-        noisy_ecef = self._radar_frame.ned_to_ecef(p_noisy_ned_radar)
-        noisy_pos_ned0 = self._ref_frame.ecef_to_ned(noisy_ecef)
+        noisy_ecef = ned_to_ecef(
+            p_noisy_ned_radar,
+            self.radar_lla[0], self.radar_lla[1], self.radar_lla[2]
+        )
+        noisy_pos_ned0 = ecef_to_ned(
+            noisy_ecef,
+            self.ref_lla0[0], self.ref_lla0[1], self.ref_lla0[2]
+        )
 
         v_n, v_e, v_d = target_vel_ned
         u_r = p_true_radar / r

@@ -114,3 +114,28 @@ def lla_to_ned(
     """
     ecef = lla_to_ecef(lat_deg, lon_deg, alt_m)
     return ecef_to_ned(ecef, ref_lat_deg, ref_lon_deg, ref_alt_m)
+
+
+def ned_to_ecef(
+    ned: np.ndarray,
+    ref_lat_deg: float,
+    ref_lon_deg: float,
+    ref_alt_m: float,
+) -> np.ndarray:
+    """
+    Convert NED position to ECEF relative to a reference point.
+
+    Parameters
+    ----------
+    ned         : np.ndarray, shape (3,)  - NED position [north, east, down] in metres.
+    ref_lat_deg : float - Reference latitude in degrees.
+    ref_lon_deg : float - Reference longitude in degrees.
+    ref_alt_m   : float - Reference altitude in metres.
+
+    Returns
+    -------
+    np.ndarray, shape (3,) - ECEF position [x, y, z] in metres.
+    """
+    ref_ecef = lla_to_ecef(ref_lat_deg, ref_lon_deg, ref_alt_m)
+    R = _ecef_to_ned_rotation(ref_lat_deg, ref_lon_deg)
+    return ref_ecef + R.T @ ned
