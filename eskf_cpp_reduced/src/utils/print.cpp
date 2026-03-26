@@ -52,6 +52,7 @@ static std::string getTimestamp() {
 
 // Need to define the static variable for everything to work
 Printer::PrintLevel Printer::current_print_level = PrintLevel::INFO;
+std::FILE* Printer::log_file = nullptr;
 
 void Printer::setPrintLevel(const std::string &level) {
   if (level == "ALL")
@@ -104,31 +105,66 @@ void Printer::setPrintLevel(PrintLevel level) {
   std::cout << std::endl;
 }
 
+void Printer::setLogFile(const std::string &filepath) {
+  if (log_file) {
+    std::fclose(log_file);
+  }
+  log_file = std::fopen(filepath.c_str(), "w");
+  if (!log_file) {
+    std::cerr << "Printer: Failed to open log file " << filepath << std::endl;
+  }
+}
+
+void Printer::closeLogFile() {
+  if (log_file) {
+    std::fclose(log_file);
+    log_file = nullptr;
+  }
+}
+
 void Printer::debugPrint(PrintLevel level, const char location[], const char line[], const char *format, ...) {
   // Only print for the current debug level
   if (static_cast<int>(level) < static_cast<int>(Printer::current_print_level)) {
     return;
   }
 
+  std::string timestamp = getTimestamp();
+
   // Print timestamp first
-  printf("[%s] ", getTimestamp().c_str());
+  printf("[%s] ", timestamp.c_str());
+  if (log_file) {
+    fprintf(log_file, "[%s] ", timestamp.c_str());
+  }
 
   // Print the location info first for our debug output
   // Truncate the filename to the max size for the filepath
   if (static_cast<int>(Printer::current_print_level) <= static_cast<int>(Printer::PrintLevel::DEBUG)) {
     std::string path(location);
     std::string base_filename = path.substr(path.find_last_of("/\\") + 1);
+    std::string loc_str;
     if (base_filename.size() > MAX_FILE_PATH_LEGTH) {
-      printf("%s", base_filename.substr(base_filename.size() - MAX_FILE_PATH_LEGTH, base_filename.size()).c_str());
+      loc_str = base_filename.substr(base_filename.size() - MAX_FILE_PATH_LEGTH, base_filename.size());
     } else {
-      printf("%s", base_filename.c_str());
+      loc_str = base_filename;
     }
-    printf(":%s ", line);
+    printf("%s:%s ", loc_str.c_str(), line);
+    if (log_file) {
+      fprintf(log_file, "%s:%s ", loc_str.c_str(), line);
+    }
   }
 
   // Print the rest of the args
   va_list args;
   va_start(args, format);
+  
+  if (log_file) {
+    va_list args_copy;
+    va_copy(args_copy, args);
+    vfprintf(log_file, format, args_copy);
+    fflush(log_file);
+    va_end(args_copy);
+  }
+  
   vprintf(format, args);
   va_end(args);
   

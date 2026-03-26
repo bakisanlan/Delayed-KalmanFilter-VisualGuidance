@@ -83,9 +83,10 @@ find_package(rclcpp QUIET)
 find_package(sensor_msgs QUIET)
 find_package(geometry_msgs QUIET)
 find_package(nav_msgs QUIET)
+find_package(mavros_msgs QUIET)
 
 set(ROS2_FOUND FALSE)
-if(ament_cmake_FOUND AND rclcpp_FOUND AND sensor_msgs_FOUND AND geometry_msgs_FOUND AND nav_msgs_FOUND)
+if(ament_cmake_FOUND AND rclcpp_FOUND AND sensor_msgs_FOUND AND geometry_msgs_FOUND AND nav_msgs_FOUND AND mavros_msgs_FOUND)
   set(ROS2_FOUND TRUE)
   message(STATUS "ROS2 found - building reduced ROS2 node")
 else()
@@ -96,6 +97,7 @@ set(ESKF_REDUCED_CORE_SOURCES
   src/eskf_jacobian_reduced.cpp
   src/eskf_core_reduced.cpp
   src/eskf_config.cpp
+  src/eskf_logger.cpp
   src/utils/print.cpp
 )
 
@@ -134,6 +136,7 @@ if(ROS2_FOUND)
     sensor_msgs
     geometry_msgs
     nav_msgs
+    mavros_msgs
   )
 
   ament_package()

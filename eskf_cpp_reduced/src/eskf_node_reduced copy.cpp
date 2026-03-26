@@ -5,13 +5,11 @@
 
 #include "eskf_cpp_reduced/eskf_config.hpp"
 #include "eskf_cpp_reduced/eskf_core_reduced.hpp"
-#include "eskf_cpp_reduced/eskf_logger.hpp"
 #include "eskf_cpp_reduced/utils/print.hpp"
 
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <mavros_msgs/msg/state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 
@@ -37,19 +35,9 @@ public:
         if (!config_file.empty()) {
             try {
                 params_ = eskf::loadConfig(config_file);
-                if (params_.log_enabled) {
-                    logger_.initTerminalLog(params_.log_dir);
-                }
                 PRINT_INFO(GREEN "[CONFIG-RED]: Loaded from %s" RESET "\n", config_file.c_str())
             } catch (const std::exception& e) {
-                if (params_.log_enabled) {
-                    logger_.initTerminalLog(params_.log_dir);
-                }
                 PRINT_WARNING(YELLOW "[CONFIG-RED]: Failed to load: %s. Using defaults." RESET "\n", e.what())
-            }
-        } else {
-            if (params_.log_enabled) {
-                logger_.initTerminalLog(params_.log_dir);
             }
         }
         eskf::printConfig(params_);
@@ -71,10 +59,6 @@ public:
             params_.topic_radar, 10,
             std::bind(&ReducedESKFNode::radarCallback, this, std::placeholders::_1));
 
-        interceptor_state_sub_ = this->create_subscription<mavros_msgs::msg::State>(
-            params_.topic_interceptor_state, 10,
-            std::bind(&ReducedESKFNode::interceptorStateCallback, this, std::placeholders::_1));
-
         interceptor_odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             params_.topic_interceptor_odom, imu_qos,
             std::bind(&ReducedESKFNode::interceptorOdomCallback, this, std::placeholders::_1));
@@ -93,31 +77,12 @@ public:
         PRINT_INFO(CYAN "  Interceptor odom topic: %s" RESET "\n", params_.topic_interceptor_odom.c_str())
         PRINT_INFO(CYAN "  Image topic:            %s" RESET "\n", params_.topic_image.c_str())
         PRINT_INFO(CYAN "  Radar topic:            %s" RESET "\n", params_.topic_radar.c_str())
-        PRINT_INFO(CYAN "  State topic:            %s" RESET "\n", params_.topic_interceptor_state.c_str())
         PRINT_INFO(CYAN "  Samples/update:         %d" RESET "\n", samples_per_eskf_)
         PRINT_INFO(CYAN "  Image delay:            %d steps" RESET "\n", delay_steps_)
         PRINT_WARNING(YELLOW "[ESKF-RED]: Waiting for interceptor odometry and first radar measurement..." RESET "\n")
     }
 
 private:
-    void interceptorStateCallback(const mavros_msgs::msg::State::SharedPtr msg) {
-        bool currently_armed = msg->armed;
-
-        if (currently_armed && !is_armed_) {
-            PRINT_INFO(BOLDGREEN "[STATE-RED]: Interceptor ARMED. Enabling filter initialization & logging." RESET "\n")
-            if (params_.log_enabled) {
-                logger_.start(params_.log_dir, params_.log_rate_hz);
-            }
-        } else if (!currently_armed && is_armed_) {
-            PRINT_INFO(BOLDYELLOW "[STATE-RED]: Interceptor DISARMED. Stopping filter & logging." RESET "\n")
-            if (logger_.isLogging()) {
-                logger_.stop();
-            }
-            is_initialized_ = false; // Reset filter on disarm
-        }
-
-        is_armed_ = currently_armed;
-    }
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
         // so the reduced filter keeps using the IMU gyro for omega.
         const eskf::Vector3d omega_flu(
@@ -162,36 +127,18 @@ private:
             return;
         }
 
-        double current_time = this->now().seconds();
-        if (current_time < penalty_freeze_until_) {
-            return;
+        if (filter_->isPbarFrozen()) {
+            filter_->setPbarFrozen(false);
         }
 
+        last_image_time_ = this->now().seconds();
         const eskf::Vector2d z_pbar(msg->point.x, msg->point.y);
         const eskf::Vector2d innovation = filter_->correctImage(z_pbar, delay_steps_);
 
-        if (innovation.norm() == 0.0) {
-            consecutive_rejections_++;
-            if (consecutive_rejections_ >= 30) {
-                penalty_freeze_until_ = current_time + params_.image_timeout_sec;
-                consecutive_rejections_ = 0;
-                if (!filter_->isPbarFrozen()) {
-                    filter_->setPbarFrozen(true);
-                }
-                PRINT_WARNING(YELLOW "[IMAGE-RED]: 30 consecutive rejections! Freezing pbar for %.1fs" RESET "\n", params_.image_timeout_sec)
-            }
-        } else {
-            consecutive_rejections_ = 0;
-            last_image_time_ = current_time;
-            if (filter_->isPbarFrozen()) {
-                filter_->setPbarFrozen(false);
-            }
-
-            static int image_log_counter = 0;
-            if (++image_log_counter % 30 == 0) {
-                PRINT_DEBUG(CYAN "[IMAGE-RED]: Innovation = [%.4f, %.4f]" RESET "\n",
-                            innovation(0), innovation(1))
-            }
+        static int image_log_counter = 0;
+        if (innovation.norm() > 0.0 && ++image_log_counter % 30 == 0) {
+            PRINT_DEBUG(CYAN "[IMAGE-RED]: Innovation = [%.4f, %.4f]" RESET "\n",
+                        innovation(0), innovation(1))
         }
     }
 
@@ -213,10 +160,6 @@ private:
             return;
         }
 
-        if (!is_armed_) {
-            return; // Initialization and updates are gated by the arm state
-        }
-
         // print debug for radar measurement
         PRINT_DEBUG(BLUE "[RADAR-RED]: Radar measurement pos=[%.3f, %.3f, %.3f] vel=[%.3f, %.3f, %.3f]" RESET "\n",
                     pending_radar_measurement_(0), pending_radar_measurement_(1), pending_radar_measurement_(2),
@@ -234,10 +177,6 @@ private:
         filter_->notifyRadarReceived();
         const eskf::reduced::RadarMeasurement innovation =
             filter_->correctRadar(target_state, pending_radar_noise_);
-
-        if (filter_->isPbarFrozen()) {
-            filter_->updatePbarFromGeometry(interceptor_state_);
-        }
 
         static int radar_log_counter = 0;
         if (++radar_log_counter % 10 == 0) {
@@ -272,7 +211,7 @@ private:
         interceptor_state_.R_b2e = R_b2e;
         interceptor_state_received_ = true;
 
-        if (is_armed_ && !is_initialized_ && pending_radar_received_) {
+        if (!is_initialized_ && pending_radar_received_) {
             initializeFilter(
                 computeTargetStateMeasurement(pending_radar_measurement_),
                 pending_radar_noise_);
@@ -305,7 +244,7 @@ private:
         radar_noise.block<3, 3>(3, 3) = eskf::math::buildCovarianceBlock3x3(
             msg.twist.covariance, fallback_vel);
 
-        return radar_noise * params_.radar_noise_inflation;
+        return radar_noise;
     }
 
     void initializeFilter(const eskf::reduced::RadarMeasurement& z_target,
@@ -413,19 +352,9 @@ private:
         pbar_msg.y = pbar(1);
         pbar_msg.z = 0.0;
         pbar_pub_->publish(pbar_msg);
-
-        if (logger_.isLogging()) {
-            double timestamp = stamp.seconds();
-            logger_.logState(timestamp, filter_->getState(), filter_->getCovariance());
-        }
     }
 
     void diagnosticsCallback() {
-        if (!is_armed_) {
-            PRINT_WARNING(YELLOW "[ESKF-RED]: Arming is waiting for filter initialization..." RESET "\n")
-            return;
-        }
-        
         if (!is_initialized_) {
             PRINT_WARNING(YELLOW "[ESKF-RED]: Waiting for radar/odometry before initialization..." RESET "\n")
             return;
@@ -463,20 +392,17 @@ private:
 
     eskf::ESKFParams params_;
     std::unique_ptr<eskf::reduced::ReducedErrorStateKalmanFilter> filter_;
-    eskf::EskfLogger logger_;
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr image_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr radar_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr interceptor_odom_sub_;
-    rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr interceptor_state_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr pbar_pub_;
     rclcpp::TimerBase::SharedPtr diag_timer_;
 
     eskf::reduced::InterceptorState interceptor_state_;
     bool interceptor_state_received_ = false;
-    bool is_armed_ = false;
     bool is_initialized_ = false;
     bool pending_radar_received_ = false;
     eskf::reduced::RadarMeasurement pending_radar_measurement_ =
@@ -489,8 +415,6 @@ private:
     int delay_steps_ = 0;
     int prediction_count_ = 0;
     double last_image_time_ = 0.0;
-    double penalty_freeze_until_ = 0.0;
-    int consecutive_rejections_ = 0;
 };
 
 int main(int argc, char** argv) {

@@ -13,12 +13,21 @@
 
 #pragma once
 
-#include "eskf_types.hpp"
-#include "eskf_types_reduced.hpp"
+#include "eskf_cpp_reduced/eskf_types_reduced.hpp"
 #include <cmath>
 
 namespace eskf {
 namespace math {
+
+/**
+ * @brief Safely bound depth bounded away from zero preserving its sign.
+ * 
+ * @param z Depth value
+ * @return Safely bounded depth parameter
+ */
+inline double boundDepth(double z) {
+    return z >= 0.0 ? std::max(z, constants::MIN_DEPTH) : std::min(z, -constants::MIN_DEPTH);
+}
 
 // ============================================================================
 // Skew-Symmetric Matrix
@@ -150,8 +159,124 @@ inline Quaterniond normalizeQuaternion(const Quaterniond& q) {
 }
 
 // ============================================================================
+// Reference Frame Conversions
+// ============================================================================
+
+inline const RotationMatrix kEnuToNed = (RotationMatrix() <<
+    0.0, 1.0,  0.0,
+    1.0, 0.0,  0.0,
+    0.0, 0.0, -1.0).finished();
+
+inline const RotationMatrix kFrdToFlu = (RotationMatrix() <<
+    1.0,  0.0,  0.0,
+    0.0, -1.0,  0.0,
+    0.0,  0.0, -1.0).finished();
+
+inline Vector3d enuToNed(const Vector3d& value_enu) {
+    return kEnuToNed * value_enu;
+}
+
+inline Vector3d fluToFrd(const Vector3d& value_flu) {
+    return kFrdToFlu * value_flu;
+}
+
+inline Quaterniond convertBodyOrientationEnuFluToNedFrd(const Quaterniond& q_enu_flu) {
+    RotationMatrix R_flu2enu = q_enu_flu.normalized().toRotationMatrix();
+    RotationMatrix R_frd2ned = kEnuToNed * R_flu2enu * kFrdToFlu;
+    return normalizeQuaternion(Quaterniond(R_frd2ned));
+}
+
+// ============================================================================
+// Covariance Matrix Utilities
+// ============================================================================
+
+inline Eigen::Matrix3d buildCovarianceBlock3x3(const std::array<double, 36>& covariance_msg,
+                                               const Eigen::Matrix3d& fallback_covariance) {
+    if (covariance_msg[0] < 0.0) {
+        return fallback_covariance;
+    }
+
+    Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) {
+            const double value = covariance_msg[row * 6 + col];
+            if (!std::isfinite(value)) {
+                return fallback_covariance;
+            }
+            covariance(row, col) = value;
+        }
+    }
+
+    covariance = 0.5 * (covariance + covariance.transpose());
+    constexpr double kMinVariance = 1e-9;
+    for (int i = 0; i < 3; ++i) {
+        if (covariance(i, i) < 0.0) {
+            return fallback_covariance;
+        }
+        covariance(i, i) = std::max(covariance(i, i), kMinVariance);
+    }
+
+    return covariance;
+}
+
+// ============================================================================
 // IBVS (Image-Based Visual Servoing) Jacobians
 // ============================================================================
+
+/**
+ * @brief Compute target position in camera frame (p_c)
+ * 
+ * @param p_t Target position in Earth (NED) frame
+ * @param interceptor Interceptor state containing position and R_b2e
+ * @param R_b2c Rotation from body to camera frame
+ * @return 3D vector p_c
+ */
+inline Vector3d computeTargetInCameraFrame(const Vector3d& p_t,
+                                           const reduced::InterceptorState& interceptor,
+                                           const RotationMatrix& R_b2c) {
+    const RotationMatrix R_e2b = interceptor.R_b2e.transpose();
+    return R_b2c * R_e2b * -(interceptor.position_ned - p_t);
+}
+
+/**
+ * @brief Compute normalized image features (pbar) from target and interceptor states
+ * 
+ * @param p_t Target position in Earth (NED) frame
+ * @param interceptor Interceptor state containing position and R_b2e
+ * @param R_b2c Rotation from body to camera frame
+ * @return 2D vector [pbar_x, pbar_y]
+ */
+inline Vector2d computeImageFeatures(const Vector3d& p_t,
+                                     const reduced::InterceptorState& interceptor,
+                                     const RotationMatrix& R_b2c) {
+    const Vector3d p_c = computeTargetInCameraFrame(p_t, interceptor, R_b2c);
+    const double p_c_z = boundDepth(p_c(2));
+    return Vector2d(p_c(0) / p_c_z, p_c(1) / p_c_z);
+}
+
+/**
+ * @brief Project target position covariance into pbar covariance
+ * 
+ * @param P_pos 3x3 position covariance matrix
+ * @param p_c Target position in camera frame
+ * @param interceptor Interceptor state containing R_b2e
+ * @param R_b2c Rotation from body to camera frame
+ * @return 2x2 projected pbar covariance matrix
+ */
+inline Eigen::Matrix2d projectPositionCovarianceToPbar(const Eigen::Matrix3d& P_pos,
+                                                       const Vector3d& p_c,
+                                                       const reduced::InterceptorState& interceptor,
+                                                       const RotationMatrix& R_b2c) {
+    const double p_c_z = boundDepth(p_c(2));
+    Eigen::Matrix<double, 2, 3> J_c;
+    J_c << 1.0 / p_c_z, 0.0, -p_c(0) / (p_c_z * p_c_z),
+           0.0, 1.0 / p_c_z, -p_c(1) / (p_c_z * p_c_z);
+           
+    const RotationMatrix R_e2b = interceptor.R_b2e.transpose();
+    const Eigen::Matrix<double, 2, 3> H_pbar_pt = J_c * R_b2c * R_e2b;
+    
+    return H_pbar_pt * P_pos * H_pbar_pt.transpose();
+}
 
 /**
  * @brief Compute IBVS velocity Jacobian Lv
@@ -168,7 +293,7 @@ inline Quaterniond normalizeQuaternion(const Quaterniond& q) {
  * @return 2x3 velocity Jacobian matrix
  */
 inline Eigen::Matrix<double, 2, 3> computeLv(double pbar_x, double pbar_y, double p_c_z) {
-    const double inv_z = 1.0 / std::max(p_c_z, constants::MIN_DEPTH);
+    const double inv_z = 1.0 / p_c_z;
     
     Eigen::Matrix<double, 2, 3> Lv;
     Lv << -inv_z,    0.0,    pbar_x * inv_z,
@@ -219,7 +344,7 @@ inline Eigen::Matrix2d computeApbar(double pbar_x, double pbar_y,
     const double wx = omega_c(0);
     const double wy = omega_c(1);
     const double wz = omega_c(2);
-    const double z_inv = 1.0 / std::max(p_c_z, constants::MIN_DEPTH);
+    const double z_inv = 1.0 / p_c_z;
     
     Eigen::Matrix2d A_pbar;
     A_pbar << vz * z_inv + pbar_y * wx - 2.0 * pbar_x * wy,    pbar_x * wx + wz,
@@ -243,7 +368,7 @@ inline Vector2d computeApcz(double pbar_x, double pbar_y,
     const double vx = v_c(0);
     const double vy = v_c(1);
     const double vz = v_c(2);
-    const double z_sq = std::max(p_c_z * p_c_z, constants::MIN_DEPTH * constants::MIN_DEPTH);
+    const double z_sq = p_c_z * p_c_z;
     
     Vector2d A_pcz;
     A_pcz << (vx - pbar_x * vz) / z_sq,
@@ -251,50 +376,7 @@ inline Vector2d computeApcz(double pbar_x, double pbar_y,
     return A_pcz;
 }
 
-// ============================================================================
-// Process Noise Covariance Computation
-// ============================================================================
 
-/**
- * @brief Compute discrete process noise covariance Qd (15x15)
- * 
- * Following paper notation:
- *   Θ_i = σ²_ωn * Δt² * I₃  [rad²]       - attitude noise
- *   V_i = σ²_an * Δt² * I₃  [m²/s²]      - velocity noise
- *   Ω_i = σ²_ωw * Δt * I₃   [rad²/s²]    - gyro bias RW
- *   A_i = σ²_aw * Δt * I₃   [m²/s⁴]      - accel bias RW
- *   M_i = σ²_mw * Δt * I₃   [nT²]        - mag bias RW
- * 
- * @param params ESKF parameters containing noise values
- * @return 15x15 block diagonal process noise covariance
- */
-inline ProcessNoise computeDiscreteProcessNoise(const ESKFParams& params) {
-    const double dt = params.dt_eskf;
-    
-    ProcessNoise Qd = ProcessNoise::Zero();
-    
-    // Θ_i: Attitude noise covariance (indices 0-2)
-    const double theta_i = params.sigma_omega_n * params.sigma_omega_n * dt * dt;
-    Qd.block<3,3>(noise_idx::OMEGA_N_START, noise_idx::OMEGA_N_START) = 
-        theta_i * Eigen::Matrix3d::Identity();
-    
-    // V_i: Velocity noise covariance (indices 3-5)
-    const double v_i = params.sigma_a_n * params.sigma_a_n * dt * dt;
-    Qd.block<3,3>(noise_idx::A_N_START, noise_idx::A_N_START) = 
-        v_i * Eigen::Matrix3d::Identity();
-    
-    // Ω_i: Gyro bias random walk covariance (indices 6-8)
-    const double omega_i = params.sigma_omega_w * params.sigma_omega_w * dt;
-    Qd.block<3,3>(noise_idx::OMEGA_W_START, noise_idx::OMEGA_W_START) = 
-        omega_i * Eigen::Matrix3d::Identity();
-    
-    // A_i: Accel bias random walk covariance (indices 9-11)
-    const double a_i = params.sigma_a_w * params.sigma_a_w * dt;
-    Qd.block<3,3>(noise_idx::A_W_START, noise_idx::A_W_START) = 
-        a_i * Eigen::Matrix3d::Identity();
-    
-    return Qd;
-}
 
 /**
  * @brief Compute reduced discrete process noise covariance Qd (3x3)

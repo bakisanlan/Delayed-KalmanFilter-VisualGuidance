@@ -113,7 +113,7 @@ NominalState ReducedErrorStateKalmanFilter::predictNominalState(
 
     const RotationMatrix R_e2b = interceptor.R_b2e.transpose();
     const Vector3d p_c = params_.R_b2c * R_e2b * (-(interceptor.position_ned - p_t));
-    const double p_c_z = std::max(p_c(2), constants::MIN_DEPTH);
+    const double p_c_z = math::boundDepth(p_c(2));
 
     const Vector3d v_c = params_.R_b2c * R_e2b * (interceptor.velocity_ned - v_t);
     const Vector3d w_c = params_.R_b2c * omega_meas;
@@ -192,9 +192,9 @@ RadarMeasurement ReducedErrorStateKalmanFilter::correctRadar(const RadarMeasurem
         const RadarNoise S = H_radar_ * PH_T + R_radar_;
         const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
 
-        if (params_.enable_false_detection_radar && d_mahal_sq > params_.chi2_threshold_radar) {
+        if (params_.enable_false_detection_radar && d_mahal_sq > params_.chi2_threshold_radar_6dof) {
             PRINT_WARNING(YELLOW "[RADAR-RED]: False detection rejected (Mahalanobis d^2=%.2f > %.2f)" RESET "\n",
-                          d_mahal_sq, params_.chi2_threshold_radar)
+                          d_mahal_sq, params_.chi2_threshold_radar_6dof)
             PRINT_WARNING(YELLOW "             Innovation pos=[%.2f, %.2f, %.2f] vel=[%.2f, %.2f, %.2f]" RESET "\n",
                           innovation(0), innovation(1), innovation(2),
                           innovation(3), innovation(4), innovation(5))
@@ -222,10 +222,9 @@ RadarMeasurement ReducedErrorStateKalmanFilter::correctRadar(const RadarMeasurem
     const Eigen::Matrix3d S = H_pos * PH_T + R_pos;
     const double d_mahal_sq = innovation_pos.transpose() * S.inverse() * innovation_pos;
 
-    constexpr double chi2_threshold_3dof = 16.27;
-    if (params_.enable_false_detection_radar && d_mahal_sq > chi2_threshold_3dof) {
+    if (params_.enable_false_detection_radar && d_mahal_sq > params_.chi2_threshold_radar_3dof) {
         PRINT_WARNING(YELLOW "[RADAR-RED]: False detection rejected (Mahalanobis d^2=%.2f > %.2f)" RESET "\n",
-                      d_mahal_sq, chi2_threshold_3dof)
+                      d_mahal_sq, params_.chi2_threshold_radar_3dof)
         PRINT_WARNING(YELLOW "             Innovation pos=[%.2f, %.2f, %.2f]" RESET "\n",
                       innovation_pos(0), innovation_pos(1), innovation_pos(2))
         return RadarMeasurement::Zero();
@@ -246,6 +245,27 @@ RadarMeasurement ReducedErrorStateKalmanFilter::correctRadar(const RadarMeasurem
 
 void ReducedErrorStateKalmanFilter::notifyRadarReceived() {
     radar_received_ = true;
+}
+
+void ReducedErrorStateKalmanFilter::updatePbarFromGeometry(const InterceptorState& interceptor) {
+    using namespace state_access;
+    using namespace math;
+
+    const Vector3d p_t = getPosition(x_);
+
+    // 1. Update pbar state directly from geometry
+    const Vector2d pbar_geom = computeImageFeatures(p_t, interceptor, params_.R_b2c);
+    x_.segment<2>(nominal_idx::PBAR_START) = pbar_geom;
+
+    // 2. Propagate target position covariance into pbar covariance
+    const Eigen::Matrix3d P_pos = P_.block<3, 3>(error_idx::DPT_START, error_idx::DPT_START);
+    const Vector3d p_c = computeTargetInCameraFrame(p_t, interceptor, params_.R_b2c);
+    const Eigen::Matrix2d P_pbar_proj = projectPositionCovarianceToPbar(
+        P_pos, p_c, interceptor, params_.R_b2c);
+
+    P_.block<2, 6>(error_idx::DPBAR_START, 0).setZero();
+    P_.block<6, 2>(0, error_idx::DPBAR_START).setZero();
+    P_.block<2, 2>(error_idx::DPBAR_START, error_idx::DPBAR_START) = P_pbar_proj;
 }
 
 NominalState ReducedErrorStateKalmanFilter::injectErrorState(
@@ -336,15 +356,6 @@ NominalState createInitialState(const Vector3d& p_t_true,
     x.segment<3>(nominal_idx::VT_START) = v_t_true + vel_error;
     x.segment<2>(nominal_idx::PBAR_START) = pbar_true + pbar_error;
     return x;
-}
-
-Vector2d computeImageFeatures(const Vector3d& p_t,
-                              const InterceptorState& interceptor,
-                              const RotationMatrix& R_b2c) {
-    const RotationMatrix R_e2b = interceptor.R_b2e.transpose();
-    const Vector3d p_c = R_b2c * R_e2b * (-(interceptor.position_ned - p_t));
-    const double p_c_z = std::max(p_c(2), constants::MIN_DEPTH);
-    return Vector2d(p_c(0) / p_c_z, p_c(1) / p_c_z);
 }
 
 }  // namespace eskf::reduced

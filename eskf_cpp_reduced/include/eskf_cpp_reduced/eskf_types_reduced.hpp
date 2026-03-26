@@ -5,9 +5,78 @@
 
 #pragma once
 
-#include "eskf_cpp_reduced/eskf_types.hpp"
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
+#include <string>
 
-namespace eskf::reduced {
+namespace eskf {
+
+using Vector2d = Eigen::Vector2d;
+using Vector3d = Eigen::Vector3d;
+using Vector6d = Eigen::Matrix<double, 6, 1>;
+using Quaterniond = Eigen::Quaterniond;
+using RotationMatrix = Eigen::Matrix3d;
+
+namespace constants {
+    /// Unit vector in z-direction (gravity direction in NED)
+    inline const Vector3d E3{0.0, 0.0, 1.0};
+
+    /// Minimum camera depth to prevent division by zero [m]
+    constexpr double MIN_DEPTH = 0.1;
+    
+    /// Small angle threshold for numerical stability
+    constexpr double SMALL_ANGLE_THRESHOLD = 1e-10;
+}
+
+/**
+ * @brief Configuration parameters for the Reduced ESKF
+ */
+struct ESKFParams {
+    std::string topic_imu = "/interceptor/imu/data_raw";
+    std::string topic_image = "/interceptor/camera/target_pbar";
+    std::string topic_radar = "/radar/target_odom";
+    std::string topic_interceptor_odom = "/mavros/global_position/local";
+    std::string topic_interceptor_state = "/interceptor/state";
+    std::string topic_odom = "/eskf_reduced/odom";
+    std::string topic_pbar = "/eskf_reduced/pbar";
+    
+    double dt_imu = 1.0 / 200.0;
+    double dt_eskf = 1.0 / 200.0;
+    double image_delay = 0.080;
+    double image_timeout_sec = 2.0;
+    
+    double sigma_img = 0.005;
+    double sigma_radar_pos = 1.0;
+    double sigma_radar_vel = 0.5;
+    double radar_noise_inflation = 1.0;
+    
+    RotationMatrix R_b2c = (RotationMatrix() << 
+        0, 1, 0,
+        0, 0, 1,
+        1, 0, 0).finished();
+    
+    int history_length = 25;
+    
+    double init_sigma_position = 3.0;
+    double init_sigma_velocity = 0.5;
+    double init_sigma_pbar = 0.1;
+    
+    bool enable_false_detection_image = true;
+    bool enable_false_detection_radar = true;
+    double chi2_threshold_image = 18.42;
+    double chi2_threshold_radar_3dof = 16.27;
+    double chi2_threshold_radar_6dof = 27.86;
+    bool use_vr = false;
+    bool radar_measurement_is_relative = false;
+
+    double sigma_target_rw = 1.5;
+    
+    bool log_enabled = false;
+    double log_rate_hz = 20.0;
+    std::string log_dir = "log/";
+};
+
+namespace reduced {
 
 using NominalState = Eigen::Matrix<double, 8, 1>;
 using ErrorState = Eigen::Matrix<double, 8, 1>;
@@ -88,4 +157,6 @@ inline Vector2d getPbar(const NominalState& x) {
 
 }  // namespace state_access
 
-}  // namespace eskf::reduced
+}  // namespace reduced
+}  // namespace eskf
+

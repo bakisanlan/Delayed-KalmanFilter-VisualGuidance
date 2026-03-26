@@ -32,6 +32,8 @@ public:
     RadarMeasurement correctRadar(const RadarMeasurement& z_target,
                                  const RadarNoise& radar_noise);
 
+    void updatePbarFromGeometry(const InterceptorState& interceptor);
+
     void notifyRadarReceived();
     bool wasRadarReceived() const { return radar_received_; }
     bool wasImageReceived() const { return first_image_received_; }
@@ -103,9 +105,5 @@ NominalState createInitialState(const Vector3d& p_t_true,
                                 const Vector3d& pos_error = Vector3d::Zero(),
                                 const Vector3d& vel_error = Vector3d::Zero(),
                                 const Vector2d& pbar_error = Vector2d::Zero());
-
-Vector2d computeImageFeatures(const Vector3d& p_t,
-                              const InterceptorState& interceptor,
-                              const RotationMatrix& R_b2c);
 
 }  // namespace eskf::reduced

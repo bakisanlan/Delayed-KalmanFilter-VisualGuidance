@@ -30,7 +30,7 @@ ReducedESKFJacobians computeReducedESKFJacobians(
     const RotationMatrix R_e2b = R_b2e.transpose();
 
     const Vector3d p_c = R_b2c * R_e2b * (-(p_i - p_t));
-    const double p_c_z = std::max(p_c(2), constants::MIN_DEPTH);
+    const double p_c_z = math::boundDepth(p_c(2));
 
     const Vector3d v_c = R_b2c * R_e2b * (v_i - v_t);
     const Vector3d omega_c = R_b2c * omega_meas;

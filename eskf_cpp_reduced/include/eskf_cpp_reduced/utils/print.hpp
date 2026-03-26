@@ -68,6 +68,16 @@ public:
   static void setPrintLevel(PrintLevel level);
 
   /**
+   * @brief Set the log file to echo print outputs.
+   */
+  static void setLogFile(const std::string &filepath);
+
+  /**
+   * @brief Close the active log file.
+   */
+  static void closeLogFile();
+
+  /**
    * @brief The print function that prints to stdout.
    * @param level the print level for this print call
    * @param location the location the print was made from
@@ -78,6 +88,9 @@ public:
 
   /// The current print level
   static PrintLevel current_print_level;
+
+  /// Pointer to the open log file (if any).
+  static std::FILE* log_file;
 
 private:
   /// The max length for the file path.  This is to avoid very long file paths from

@@ -1,8 +1,9 @@
 topics:
-  imu: "/interceptor/imu/data_raw"
+  imu: "/interceptor/imu/data_raw"    #for angular veloicty
   image: "/interceptor/camera/target_pbar"
   radar: "/radar/emulated_measurement"
-  interceptor_odom: "/interceptor/global_position/local"
+  interceptor_odom: "/interceptor/global_position/local"   # for interceptor pos,vel,Rb2e
+  interceptor_state: "/interceptor/state" # mavros state topic
   output_state: "/eskf_reduced/odom"
   output_pose: "/eskf_reduced/pbar"
 
@@ -12,19 +13,15 @@ timing:
   image_delay_ms: 0
   image_timeout_sec: 2.0
 
-imu_noise:
-  sigma_a_n: 0.19953898572
-  sigma_omega_n: 0.007733389
-  sigma_a_w: 0.00024348074
-  sigma_omega_w: 0.00001557916
 
 measurement_noise:
-  image_sigma: 0.003
+  image_sigma: 0.03
   radar_sigma_pos: 10.0
   radar_sigma_vel: 0.5
+  radar_noise_inflation: 2.0
 
 radar:
-  use_vr: true  #velocity measurement
+  use_vr: false  #velocity measurement
   measurement_is_relative: false
 
 reduced_filter:
@@ -34,17 +31,11 @@ initial_covariance:
   position: 5.0
   velocity: 1.0
   pbar: 0.05
-  attitude: 0.05
-  gyro_bias: 0.005
-  accel_bias: 0.05
 
 camera:
   R_b2c: [0, 1, 0,
           0, 0, 1,
           1, 0, 0]
-
-constants:
-  gravity: 9.8065
 
 history:
   buffer_length: 25
@@ -52,13 +43,13 @@ history:
 chi2_gating:
   enable_false_detection_image: true
   enable_false_detection_radar: true
-  image_threshold: 18.42
-  radar_threshold: 16.27
+  image_threshold: 18.43
+  radar_threshold_3dof: 100.37
+  radar_threshold_6dof: 27.86
 
 logging:
-  enable: false
+  enable: true
   rate_hz: 50.0
-  file_path: "log/eskf_reduced_log.csv"
-
-magnetometer:
-  enable: false
+  log_dir: "/home/ituarc/ros2_ws/src/eskf_cpp_reduced/log/"
+  radar_csv_dir: "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/radar"
+  camera_csv_dir: "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/camera"

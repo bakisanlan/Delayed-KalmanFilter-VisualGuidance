@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "eskf_types.hpp"
+#include "eskf_cpp_reduced/eskf_types_reduced.hpp"
 #include <string>
 
 namespace eskf {

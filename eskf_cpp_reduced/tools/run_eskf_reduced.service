@@ -1,0 +1,14 @@
+[Unit]
+Description=Run ESKF Reduced Startup Service
+After=network.target
+
+[Service]
+Type=simple
+User=ituarc
+Environment="HOME=/home/ituarc"
+ExecStart=/home/ituarc/ros2_ws/src/eskf_cpp_reduced/tools/run_eskf_reduced.sh
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

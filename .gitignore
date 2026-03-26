@@ -7,3 +7,9 @@
 /eskf_cpp_reduced/build_ros2/ament_cmake_core/stamps
 /eskf_cpp_reduced/build_ros2/ament_cmake_uninstall_target
 /eskf_cpp_reduced/build_ros2
+/eskf_py/install
+/eskf_py/build
+/eskf_py/log
+/eskf_py/interceptor_sensor_emulators/build
+/eskf_py/interceptor_sensor_emulators/install
+/eskf_py/interceptor_sensor_emulators/log
