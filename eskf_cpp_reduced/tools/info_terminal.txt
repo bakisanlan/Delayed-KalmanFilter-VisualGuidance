@@ -1,0 +1,98 @@
+ros2 launch /home/ituarc/Documents/GitHub/FeatureMatching-PythonCODE/OV/launch/visualize_odom_ned.launch.py
+
+
+KALIBR
+sudo docker run -it --rm \
+  --runtime nvidia \
+  --network host \
+  -e DISPLAY=$DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v $HOME/Desktop:/Desktop \
+   kalibr:noetic-arm64
+  
+rosrun kalibr kalibr_calibrate_cameras --target /data/april_6x6_80x80cm.yaml --models pinhole-equi --topics /camera/image_raw --bag /data/calib_01.bag --bag-freq 10.0
+rosrun kalibr kalibr_calibrate_imu_camera --bag /data/calib_01.bag --cam /data/camchain.yaml --imu /data/imuchain.yaml --target /data/april_6x6_80x80cm.yaml 
+
+
+ALLAN VARIANCE
+#sudo docker build --network host -t allan_variance .
+xhost +local:docker
+sudo docker run -it \
+  --runtime nvidia \
+  --network host \
+  -e DISPLAY=$DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v $HOME/Desktop:/Desktop \
+  allan_variance
+
+rosrun allan_variance_ros allan_variance folder/ folder/imu.yaml 
+rosrun allan_variance_ros analysis.py --data allan_variance.csv
+
+
+
+./setup_macro_all_ssh.sh
+./record.bag
+vnrun pf DEBUG
+vnstop
+
+
+sudo docker run -it --rm --net=host --privileged -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v ~/kalibr_data:/data kalibr:noetic-arm64-fixed
+sudo docker commit mystifying_shirley kalibr:noetic-arm64-fixed
+
+
+
+
+% cost (no mavros-camera-recordbag)
+VIO               : %20 CPU, 170MB RAM 
+odom_subs         : %13 CPU, 200MB RAM 
+vn vio info/debug : %18 CPU, 220MB RAM
+vn pf  info/debug : 
+
+
+ros2 bag reindex -s sqlite3 rosbag2_2026_02_04-13_39_04/
+
+rosbags-convert --src rosbag2_2025_12_23-23_55_08/ --dst calib_01.bag
+
+gst-launch-1.0 \
+  nvarguscamerasrc sensor-id=0 sensor-mode=2 \
+                   tnr-mode=0  tnr-strength=0 \
+                   ee-mode=0   ee-strength=0 \
+  ! 'video/x-raw(memory:NVMM),width=1920,height=1080,framerate=30/1' \
+  ! nvvidconv flip-method=0  interpolation-method=5 \
+  ! 'video/x-raw(memory:NVMM),width=960,height=720' \
+  ! nvegltransform ! nveglglessink -e
+  
+  nano ~/.bashrc
+  source ~/.bashrc
+  
+ #global shutter cam 
+ ros2 run camera_publisher camera_publisher_node --ros-args \
+  -p device:=/dev/video1 \
+  -p width:=800 \
+  -p height:=600 \
+  -p fps:=50 \
+  -p codec:=MJPG \
+  -p topic:=/camera/image_raw
+
+
+python3 scripts/generate_fisheye_mask.py --radius_ratio 1.4 --preview
+
+
+flatpak run --device=all org.mavlink.qgroundcontrol
+
+
+python radar_emulator_node.py 
+python target_state_bridge.py 
+python -m interceptor_sensor_emulators.camera_emulator_node --ros-args --params-file config/camera_config.yaml
+or
+# Launch all emulators simultaneously
+ros2 launch interceptor_sensor_emulators interceptor_emulators.launch.py
+ituarc@ubuntu:~/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators$ ros2 launch interceptor_sensor_emulators interceptor_emulators.launch.py
+
+
+ros2 run eskf_cpp_reduced eskf_node_reduced --ros-args -p config_file:=/home/ituarc/ros2_ws/src/eskf_cpp_reduced/config/eskf_reduced_params.yaml
+
+ros2 service call /interceptor/param/set mavros_msgs/srv/ParamSetV2 \
+  "{force_set: true, param_id: 'SYSID_MYGCS', value: {type: 2, integer_value: 10}}"
+SYSID_MYGCS,10
+
