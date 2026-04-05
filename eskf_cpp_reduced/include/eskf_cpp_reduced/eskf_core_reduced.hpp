@@ -67,6 +67,28 @@ private:
                      const ErrorCovariance& P_start,
                      size_t idx_start);
 
+    /**
+     * @brief Method 2: Measurement Extrapolation.
+     *
+     * Forward-predicts the delayed pixel measurement z_d = pbar(k-D) to the
+     * current time k by integrating the IBVS dynamics over the stored
+     * interceptor/IMU history.  The measurement noise covariance is inflated
+     * by propagating R_img through the accumulated A_pbar linearisation:
+     *
+     *   R_ext = Phi_D * R_img * Phi_D^T   where Phi_D = prod_{j} F_j
+     *                                      and   F_j = I + A_pbar_j * dt
+     *
+     * A standard present-time KF update is then applied to (x_, P_) using the
+     * extrapolated measurement z_ext and the inflated noise R_ext.
+     *
+     * @param z_pbar   Raw delayed pixel measurement (2x1)
+     * @param idx_delayed Index in history_ of the state at capture time (k-D)
+     * @return Innovation vector (2x1), or zero vector if gated/skipped.
+     */
+    Vector2d correctImageNone(const Vector2d& z_pbar);
+
+    Vector2d correctImageExtrapolate(const Vector2d& z_pbar, int idx_delayed);
+
     void updateHistory(const IMUMeasurement& imu,
                        const InterceptorState& interceptor);
 

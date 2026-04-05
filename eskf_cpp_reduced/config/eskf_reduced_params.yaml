@@ -13,6 +13,8 @@ timing:
   image_delay_ms: 0
   image_timeout_sec: 2.0
 
+delay_compensation:
+  enable_extrapolation: true
 
 measurement_noise:
   image_sigma: 0.03

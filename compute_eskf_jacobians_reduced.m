@@ -135,11 +135,14 @@ function [Fc, Gc, Fd, Gd] = compute_eskf_jacobians_reduced(x_nominal, omega_m, d
     %   Fd = expm(Fc*dt)
     
   
-    % --- Build Fd (20x20) ---
-    Fd = eye(8) + Fc * dt;
+    % --- Build Fd (8x8) using matrix exponential for accuracy ---
+    % First-order (Fd = I + Fc*dt) compounds errors badly during re-propagation.
+    % expm is exact for the linearised system and avoids covariance blowup.
+    Fd = expm(Fc * dt);
     
     % --- Gd (8x3) ---
     Gd = Gc * dt;
+
     
     % For more accuracy on attitude noise, could use integral of Phi_theta
     % but first-order is usually sufficient

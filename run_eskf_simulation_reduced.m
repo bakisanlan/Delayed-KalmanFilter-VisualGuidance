@@ -10,7 +10,7 @@ dt_imu = 1/200;           % IMU / truth propagation rate [Hz]
 dt_eskf = 1/200;          % Reduced filter prediction rate [Hz]
 dt_image = 1/30;          % Image update rate [Hz]
 dt_radar = 1/0.5;         % RADAR update rate [Hz]
-t_delay = 0/1000;         % Image processing delay [s]
+t_delay = 80/1000;         % Image processing delay [s]
 t_total = 80;             % Total simulation time [s]
 D = round(t_delay / dt_imu);
 
@@ -111,8 +111,16 @@ eskf_params.R_radar = R_radar_init;
 eskf_params.x_init = x_init;
 eskf_params.P_init = P_init;
 eskf_params.delay_steps = D;
+% ---------------------------------------------------------------
+% Delay compensation strategy:
+%   'repropagate' - Method 1: correct at k-D, re-propagate to k
+%   'extrapolate' - Method 2: forward-predict pixel to k, update now
+%   'none'        - Baseline: apply delayed pixel directly (no compensation)
+% ---------------------------------------------------------------
+eskf_params.delay_method = 'extrapolate';
 
 eskf_red = ErrorStateKalmanFilter_reduced(eskf_params);
+
 
 %% ======================== STORAGE FOR RESULTS ==========================
 x_true_log = zeros(8, N_imu);
@@ -125,7 +133,22 @@ fprintf('Starting reduced ESKF simulation...\n');
 fprintf('Total time: %.1f s, ESKF rate: %.0f Hz, Image rate: %.0f Hz, RADAR rate: %.1f Hz\n', ...
         t_total, 1/dt_eskf, 1/dt_image, 1/dt_radar);
 fprintf('Image delay: %.0f ms (%d steps)\n', t_delay * 1000, D);
+fprintf('Delay compensation method: %s\n', eskf_params.delay_method);
 fprintf('Assumption: interceptor pose and velocity are known inputs.\n\n');
+
+
+%% ======================== TRUTH GEOMETRY HISTORY (for delayed image sim) ===
+% The camera shutter fires at k-D. We need p_int, p_tgt, R_b2e from that past
+% step to generate the correct delayed pixel measurement.
+truth_hist_p_int  = zeros(3, D+1);     % circular: columns 1..D+1, oldest→newest
+truth_hist_p_tgt  = zeros(3, D+1);
+truth_hist_R_b2e  = repmat(eye(3), 1, 1, D+1);
+% Pre-fill with initial values so the first D steps don't read garbage
+for ii = 1:D+1
+    truth_hist_p_int(:, ii) = p_int;
+    truth_hist_p_tgt(:, ii) = p_tgt;
+    truth_hist_R_b2e(:,:,ii) = quat2rotm(q_true');
+end
 
 eskf_update_counter = 0;
 eskf_sample_idx = round(dt_eskf / dt_imu);
@@ -152,6 +175,14 @@ for k = 1:N_imu
     R_b2e_true = quat2rotm(q_true');
     x_true_reduced = [p_tgt; v_tgt; x_true_full(idx_pbar_full)];
 
+    %% -------------------- Update truth geometry history --------------------
+    % Shift left: discard oldest (column 1), append current at end
+    truth_hist_p_int = [truth_hist_p_int(:, 2:end),  p_int];
+    truth_hist_p_tgt = [truth_hist_p_tgt(:, 2:end),  p_tgt];
+    truth_hist_R_b2e = cat(3, truth_hist_R_b2e(:,:,2:end), R_b2e_true);
+    % Column (end) = current (k), column 1 = oldest (k - D steps back)
+    % delayed index is column 1 (exactly D steps old)
+
     %% -------------------- Reduced ESKF prediction --------------------
     omega_accum = omega_accum + omega_true;
     a_accum = a_accum + zeros(3, 1);
@@ -176,11 +207,19 @@ for k = 1:N_imu
     if image_update_counter >= image_sample_idx && k > D && useCam
         image_update_counter = 0;
 
-        p_r_cam_true = R_b2c * R_b2e_true' * (-(p_int - p_tgt));
-        if p_r_cam_true(3) > 2
-            z_meas = [p_r_cam_true(1) / p_r_cam_true(3);
-                      p_r_cam_true(2) / p_r_cam_true(3)] + sigma_img * randn(2, 1);
+        % Use the scene geometry from D steps ago (the moment the shutter fired).
+        % truth_hist_*(:,1) is the oldest entry = exactly D steps back.
+        p_int_delayed  = truth_hist_p_int(:, 1);
+        p_tgt_delayed  = truth_hist_p_tgt(:, 1);
+        R_b2e_delayed  = truth_hist_R_b2e(:,:, 1);
+
+        p_r_cam_delayed = R_b2c * R_b2e_delayed' * (-(p_int_delayed - p_tgt_delayed));
+        if p_r_cam_delayed(3) > 2
+            z_meas = [p_r_cam_delayed(1) / p_r_cam_delayed(3);
+                      p_r_cam_delayed(2) / p_r_cam_delayed(3)] + sigma_img * randn(2, 1);
             eskf_red.correctImage(z_meas, D);
+            % Patch history so post-correction state is visible to future lookbacks
+            eskf_red.patchLastHistory();
         end
     end
 
@@ -195,6 +234,8 @@ for k = 1:N_imu
         eskf_red.R_radar = blkdiag(R_pos, R_vel);
         z_radar = [z_pos_ned0; z_vel_ned0];
         eskf_red.correctRadar(z_radar);
+        % Patch history so post-correction state is visible to future lookbacks
+        eskf_red.patchLastHistory();
     end
 
     %% -------------------- Store results --------------------

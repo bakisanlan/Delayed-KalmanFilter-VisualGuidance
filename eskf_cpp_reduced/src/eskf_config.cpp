@@ -101,6 +101,12 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
         params.radar_measurement_is_relative = getScalar<bool>(radar, "measurement_is_relative", false);
     }
 
+    // === Delay Compensation ===
+    if (config["delay_compensation"]) {
+        const auto& dc = config["delay_compensation"];
+        params.enable_image_extrapolation = getScalar<bool>(dc, "enable_extrapolation", false);
+    }
+
     // === Reduced Filter ===
     if (config["reduced_filter"]) {
         const auto& reduced = config["reduced_filter"];
@@ -167,6 +173,13 @@ void printConfig(const ESKFParams& params) {
     PRINT_INFO(BOLDWHITE "\nRadar:" RESET "\n")
     PRINT_INFO(CYAN "  Use vr:    %s" RESET "\n", params.use_vr ? GREEN "yes" RESET : RED "no" RESET)
     PRINT_INFO(CYAN "  Relative:  %s" RESET "\n", params.radar_measurement_is_relative ? GREEN "yes" RESET : RED "no" RESET)
+
+    PRINT_INFO(BOLDWHITE "\nDelay Compensation:" RESET "\n")
+    PRINT_INFO(CYAN "  Image delay:        %.1f ms" RESET "\n", params.image_delay * 1000.0)
+    PRINT_INFO(CYAN "  Method:             %s" RESET "\n",
+               params.enable_image_extrapolation
+                   ? GREEN "Extrapolation (Method 2)" RESET
+                   : YELLOW "None (no compensation)" RESET)
 
     PRINT_INFO(BOLDWHITE "\nTopics:" RESET "\n")
     PRINT_INFO(CYAN "  IMU:             %s" RESET "\n", params.topic_imu.c_str())

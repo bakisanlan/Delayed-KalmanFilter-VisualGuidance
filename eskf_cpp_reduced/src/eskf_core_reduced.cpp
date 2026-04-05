@@ -132,50 +132,137 @@ NominalState ReducedErrorStateKalmanFilter::predictNominalState(
 
 Vector2d ReducedErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
                                                      int delay_steps) {
-    Vector2d innovation = Vector2d::Zero();
-
     const int idx_delayed = static_cast<int>(history_.size()) - delay_steps - 1;
     if (idx_delayed < 0 || idx_delayed >= static_cast<int>(history_.size())) {
-        return innovation;
+        return Vector2d::Zero();
     }
 
-    const NominalState& x_prior = history_[idx_delayed].x;
-    const ErrorCovariance& P_prior = history_[idx_delayed].P;
+    // Dispatch based on delay compensation 'enable_image_extrapolation'
+    if (params_.enable_image_extrapolation) {
+        return correctImageExtrapolate(z_pbar, idx_delayed);
+    }
 
-    const Vector2d z_pred = state_access::getPbar(x_prior);
-    innovation = z_pbar - z_pred;
+    // ---- Method 0: No compensation — apply delayed pixel directly -----------
+    return correctImageNone(z_pbar);
+}
 
-    const Eigen::Matrix<double, 8, 2> PH_T = P_prior * H_img_.transpose();
+// ---------------------------------------------------------------------------
+Vector2d ReducedErrorStateKalmanFilter::correctImageNone(const Vector2d& z_pbar) {
+    // Method 0: No Delay Compensation (Naive Baseline)
+    //
+    // The delayed pixel z_d = pbar(k-D) is applied directly to the CURRENT
+    // state (x_, P_) as if it arrived without any delay.  No history lookup,
+    // no re-propagation, no noise inflation.
+    //
+
+    const Vector2d z_pred = state_access::getPbar(x_);
+    Vector2d innovation   = z_pbar - z_pred;
+
+    const Eigen::Matrix<double, 8, 2> PH_T = P_ * H_img_.transpose();
     const ImageNoise S = H_img_ * PH_T + R_img_;
     const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
 
     if (params_.enable_false_detection_image && d_mahal_sq > params_.chi2_threshold_image) {
-        PRINT_WARNING(YELLOW "[IMAGE-RED]: False detection rejected (Mahalanobis d^2=%.2f > %.2f)" RESET "\n",
+        PRINT_WARNING(YELLOW "[IMAGE-NOCOMP]: False detection rejected (d^2=%.2f > %.2f)" RESET "\n",
                       d_mahal_sq, params_.chi2_threshold_image)
-        PRINT_WARNING(YELLOW "             Innovation pbar=[%.4f, %.4f]" RESET "\n",
-                      innovation(0), innovation(1))
+        return Vector2d::Zero();
+    }
+
+    const Eigen::Matrix<double, 8, 2> K = PH_T * S.inverse();
+    x_ = injectErrorState(x_, K * innovation);
+
+    const StateJacobian I_KH = StateJacobian::Identity() - K * H_img_;
+    P_ = resetCovariance(I_KH * P_ * I_KH.transpose() + K * R_img_ * K.transpose());
+
+    if (!first_image_received_) {
+        first_image_received_ = true;
+        pbar_frozen_ = false;
+        PRINT_INFO(BOLDGREEN "[IMAGE-NOCOMP]: First image received - pbar propagation enabled" RESET "\n")
+    }
+
+    return innovation;
+}
+
+// ---------------------------------------------------------------------------
+Vector2d ReducedErrorStateKalmanFilter::correctImageExtrapolate(const Vector2d& z_pbar,
+                                                                int idx_delayed) {
+    // Method 2: Measurement Extrapolation (Forward Prediction)
+    //
+    // Integrate the IBVS dynamics over the stored history from idx_delayed
+    // to the end to forward-predict z_d = pbar(k-D) to current time k.
+    //
+    // Simultaneously accumulate the linearised pbar propagation matrix Phi
+    // so the inflated noise R_ext = Phi * R_img * Phi^T captures the
+    // growing uncertainty introduced by the extrapolation.
+    using namespace math;
+
+    Vector2d z_ext = z_pbar;          // forward-predicted measurement
+    Eigen::Matrix2d Phi = Eigen::Matrix2d::Identity();   // noise propagation
+
+    const int N = static_cast<int>(history_.size());
+    for (int j = idx_delayed; j < N - 1; ++j) {
+        const Vector3d& omega_j      = history_[j].imu.omega;
+        const InterceptorState& ic_j = history_[j].interceptor;
+        const NominalState& x_j      = history_[j].x;
+
+        const double pbar_x = x_j(nominal_idx::PBAR_START);
+        const double pbar_y = x_j(nominal_idx::PBAR_START + 1);
+        const Vector3d p_t_j = x_j.segment<3>(nominal_idx::PT_START);
+        const Vector3d v_t_j = x_j.segment<3>(nominal_idx::VT_START);
+
+        // Camera-frame quantities at history step j
+        const RotationMatrix R_e2b_j = ic_j.R_b2e.transpose();
+        const Vector3d p_c_j  = params_.R_b2c * R_e2b_j * (-(ic_j.position_ned - p_t_j));
+        const double   p_c_z  = boundDepth(p_c_j(2));
+        const Vector3d v_c_j  = params_.R_b2c * R_e2b_j * (ic_j.velocity_ned - v_t_j);
+        const Vector3d omega_c_j = params_.R_b2c * omega_j;
+
+        // IBVS interaction matrices
+        const auto Lv_j = computeLv(pbar_x, pbar_y, p_c_z);
+        const auto Lw_j = computeLw(pbar_x, pbar_y);
+
+        // Euler-integrate the measurement forward by one step
+        z_ext += (Lv_j * v_c_j + Lw_j * omega_c_j) * params_.dt_eskf;
+
+        // Linearised pbar propagation: F_j = I + A_pbar_j * dt
+        const Eigen::Matrix2d A_pbar_j = computeApbar(pbar_x, pbar_y, v_c_j, omega_c_j, p_c_z);
+        const Eigen::Matrix2d F_j = Eigen::Matrix2d::Identity() + A_pbar_j * params_.dt_eskf;
+        Phi = F_j * Phi;    // accumulate: Phi_D = F_{D-1} * ... * F_0
+    }
+
+    // Inflated noise: R_ext = Phi * R_img * Phi^T
+    const ImageNoise R_ext = Phi * R_img_ * Phi.transpose();
+
+    // Standard present-time KF update on (x_, P_)
+    const Vector2d z_pred = state_access::getPbar(x_);
+    Vector2d innovation   = z_ext - z_pred;
+
+    const Eigen::Matrix<double, 8, 2> PH_T = P_ * H_img_.transpose();
+    const ImageNoise S = H_img_ * PH_T + R_ext;
+    const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
+
+    if (params_.enable_false_detection_image && d_mahal_sq > params_.chi2_threshold_image) {
+        PRINT_WARNING(YELLOW "[IMAGE-EXTRAP]: False detection rejected (d^2=%.2f > %.2f)" RESET "\n",
+                      d_mahal_sq, params_.chi2_threshold_image)
         return Vector2d::Zero();
     }
 
     const Eigen::Matrix<double, 8, 2> K = PH_T * S.inverse();
     const ErrorState delta_x = K * innovation;
-    const NominalState x_corrected = injectErrorState(x_prior, delta_x);
+    x_ = injectErrorState(x_, delta_x);
 
     const StateJacobian I_KH = StateJacobian::Identity() - K * H_img_;
-    ErrorCovariance P_corrected =
-        I_KH * P_prior * I_KH.transpose() + K * R_img_ * K.transpose();
-    P_corrected = resetCovariance(P_corrected);
-
-    repropagate(x_corrected, P_corrected, static_cast<size_t>(idx_delayed));
+    P_ = resetCovariance(I_KH * P_ * I_KH.transpose() + K * R_ext * K.transpose());
 
     if (!first_image_received_) {
         first_image_received_ = true;
         pbar_frozen_ = false;
-        PRINT_INFO(BOLDGREEN "[IMAGE-RED]: First image received - pbar propagation enabled" RESET "\n")
+        PRINT_INFO(BOLDGREEN "[IMAGE-EXTRAP]: First image received - pbar propagation enabled" RESET "\n")
     }
 
     return innovation;
 }
+
 
 RadarMeasurement ReducedErrorStateKalmanFilter::correctRadar(const RadarMeasurement& z_target,
                                                              const RadarNoise& radar_noise) {
@@ -193,7 +280,7 @@ RadarMeasurement ReducedErrorStateKalmanFilter::correctRadar(const RadarMeasurem
         const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
 
         if (params_.enable_false_detection_radar && d_mahal_sq > params_.chi2_threshold_radar_6dof) {
-            PRINT_WARNING(YELLOW "[RADAR-RED]: False detection rejected (Mahalanobis d^2=%.2f > %.2f)" RESET "\n",
+            PRINT_WARNING(YELLOW "[RADAR-RED]: False detection rejected (d^2=%.2f > %.2f)" RESET "\n",
                           d_mahal_sq, params_.chi2_threshold_radar_6dof)
             PRINT_WARNING(YELLOW "             Innovation pos=[%.2f, %.2f, %.2f] vel=[%.2f, %.2f, %.2f]" RESET "\n",
                           innovation(0), innovation(1), innovation(2),

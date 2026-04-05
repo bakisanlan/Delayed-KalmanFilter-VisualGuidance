@@ -69,6 +69,9 @@ struct ESKFParams {
     bool use_vr = false;
     bool radar_measurement_is_relative = false;
 
+    // Delay compensation
+    bool enable_image_extrapolation = false; ///< true = Method 2 (extrapolate), false = Method 1 (repropagate)
+
     double sigma_target_rw = 1.5;
     
     bool log_enabled = false;
