@@ -77,7 +77,8 @@ void ReducedErrorStateKalmanFilter::predict(const Vector3d& omega_meas,
     NominalState x_new = predictNominalState(x_, omega_meas, interceptor, params_.dt_eskf);
     const ReducedESKFJacobians jac = computeReducedESKFJacobians(
         x_, omega_meas, params_.dt_eskf, params_.R_b2c,
-        interceptor.R_b2e, interceptor.position_ned, interceptor.velocity_ned);
+        interceptor.R_b2e, interceptor.position_ned, interceptor.velocity_ned,
+        params_.min_depth);
 
     ErrorCovariance P_new;
     P_new.noalias() = jac.Fd * P_ * jac.Fd.transpose() + jac.Gc * Qd_ * jac.Gc.transpose();
@@ -92,6 +93,11 @@ void ReducedErrorStateKalmanFilter::predict(const Vector3d& omega_meas,
 
     x_ = x_new;
     P_ = P_new;
+
+    // Track how many steps have passed since pbar was unfrozen for delay compensation
+    if (!pbar_frozen_) {
+        ++steps_since_unfreeze_;
+    }
 
     updateHistory(IMUMeasurement(omega_meas, timestamp), interceptor);
 }
@@ -113,7 +119,7 @@ NominalState ReducedErrorStateKalmanFilter::predictNominalState(
 
     const RotationMatrix R_e2b = interceptor.R_b2e.transpose();
     const Vector3d p_c = params_.R_b2c * R_e2b * (-(interceptor.position_ned - p_t));
-    const double p_c_z = math::boundDepth(p_c(2));
+    const double p_c_z = math::boundDepth(p_c(2), params_.min_depth);
 
     const Vector3d v_c = params_.R_b2c * R_e2b * (interceptor.velocity_ned - v_t);
     const Vector3d w_c = params_.R_b2c * omega_meas;
@@ -137,8 +143,13 @@ Vector2d ReducedErrorStateKalmanFilter::correctImage(const Vector2d& z_pbar,
         return Vector2d::Zero();
     }
 
-    // Dispatch based on delay compensation 'enable_image_extrapolation'
-    if (params_.enable_image_extrapolation) {
+    // When pbar is frozen its dynamics are suppressed, so history-based
+    // extrapolation is invalid.  After unfreezing we must also wait until
+    // at least delay_steps fresh (unfrozen) entries fill the history before
+    // the extrapolation window is trustworthy.
+    if (params_.enable_image_extrapolation
+        && !pbar_frozen_
+        && steps_since_unfreeze_ >= delay_steps) {
         return correctImageExtrapolate(z_pbar, idx_delayed);
     }
 
@@ -213,7 +224,8 @@ Vector2d ReducedErrorStateKalmanFilter::correctImageExtrapolate(const Vector2d& 
         // Camera-frame quantities at history step j
         const RotationMatrix R_e2b_j = ic_j.R_b2e.transpose();
         const Vector3d p_c_j  = params_.R_b2c * R_e2b_j * (-(ic_j.position_ned - p_t_j));
-        const double   p_c_z  = boundDepth(p_c_j(2));
+        const double p_c_z = math::boundDepth(p_c_j(2), params_.min_depth);
+
         const Vector3d v_c_j  = params_.R_b2c * R_e2b_j * (ic_j.velocity_ned - v_t_j);
         const Vector3d omega_c_j = params_.R_b2c * omega_j;
 
@@ -263,7 +275,6 @@ Vector2d ReducedErrorStateKalmanFilter::correctImageExtrapolate(const Vector2d& 
     return innovation;
 }
 
-
 RadarMeasurement ReducedErrorStateKalmanFilter::correctRadar(const RadarMeasurement& z_target,
                                                              const RadarNoise& radar_noise) {
     R_radar_ = radar_noise;
@@ -280,7 +291,7 @@ RadarMeasurement ReducedErrorStateKalmanFilter::correctRadar(const RadarMeasurem
         const double d_mahal_sq = innovation.transpose() * S.inverse() * innovation;
 
         if (params_.enable_false_detection_radar && d_mahal_sq > params_.chi2_threshold_radar_6dof) {
-            PRINT_WARNING(YELLOW "[RADAR-RED]: False detection rejected (d^2=%.2f > %.2f)" RESET "\n",
+            PRINT_WARNING(YELLOW "[RADAR-RED]: False detection rejected (Mahalanobis d^2=%.2f > %.2f)" RESET "\n",
                           d_mahal_sq, params_.chi2_threshold_radar_6dof)
             PRINT_WARNING(YELLOW "             Innovation pos=[%.2f, %.2f, %.2f] vel=[%.2f, %.2f, %.2f]" RESET "\n",
                           innovation(0), innovation(1), innovation(2),
@@ -334,6 +345,25 @@ void ReducedErrorStateKalmanFilter::notifyRadarReceived() {
     radar_received_ = true;
 }
 
+Vector3d ReducedErrorStateKalmanFilter::getRelativePosition(const InterceptorState& interceptor) const {
+    using namespace state_access;
+    using namespace math;
+
+    const Vector3d p_t = getPosition(x_);
+    const Vector2d pbar = state_access::getPbar(x_);
+
+    // Compute depth from the estimated target position
+    const Vector3d p_c = computeTargetInCameraFrame(p_t, interceptor, params_.R_b2c);
+    const double depth = boundDepth(p_c(2), params_.min_depth);
+
+    // Reconstruct camera-frame relative position from pbar and depth
+    const Vector3d p_c_reconstructed(pbar(0) * depth, pbar(1) * depth, depth);
+
+    // Rotate back to NED: p_rel = R_b2e * R_c2b * p_c = p_t - p_i
+    const RotationMatrix R_c2b = params_.R_b2c.transpose();
+    return interceptor.R_b2e * R_c2b * p_c_reconstructed;
+}
+
 void ReducedErrorStateKalmanFilter::updatePbarFromGeometry(const InterceptorState& interceptor) {
     using namespace state_access;
     using namespace math;
@@ -341,14 +371,14 @@ void ReducedErrorStateKalmanFilter::updatePbarFromGeometry(const InterceptorStat
     const Vector3d p_t = getPosition(x_);
 
     // 1. Update pbar state directly from geometry
-    const Vector2d pbar_geom = computeImageFeatures(p_t, interceptor, params_.R_b2c);
+    const Vector2d pbar_geom = computeImageFeatures(p_t, interceptor, params_.R_b2c, params_.min_depth);
     x_.segment<2>(nominal_idx::PBAR_START) = pbar_geom;
 
     // 2. Propagate target position covariance into pbar covariance
     const Eigen::Matrix3d P_pos = P_.block<3, 3>(error_idx::DPT_START, error_idx::DPT_START);
     const Vector3d p_c = computeTargetInCameraFrame(p_t, interceptor, params_.R_b2c);
     const Eigen::Matrix2d P_pbar_proj = projectPositionCovarianceToPbar(
-        P_pos, p_c, interceptor, params_.R_b2c);
+        P_pos, p_c, interceptor, params_.R_b2c, params_.min_depth);
 
     P_.block<2, 6>(error_idx::DPBAR_START, 0).setZero();
     P_.block<6, 2>(0, error_idx::DPBAR_START).setZero();
@@ -383,7 +413,8 @@ void ReducedErrorStateKalmanFilter::repropagate(const NominalState& x_start,
 
         const ReducedESKFJacobians jac = computeReducedESKFJacobians(
             x_reprop, omega_meas, params_.dt_eskf, params_.R_b2c,
-            interceptor.R_b2e, interceptor.position_ned, interceptor.velocity_ned);
+            interceptor.R_b2e, interceptor.position_ned, interceptor.velocity_ned,
+            params_.min_depth);
 
         P_reprop.noalias() =
             jac.Fd * P_reprop * jac.Fd.transpose() + jac.Gc * Qd_ * jac.Gc.transpose();

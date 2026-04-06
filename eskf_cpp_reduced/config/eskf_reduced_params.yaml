@@ -1,17 +1,19 @@
 topics:
-  imu: "/interceptor/imu/data_raw"    #for angular veloicty
+  imu: "/mavros/imu/data_raw"    #for angular veloicty
   image: "/interceptor/camera/target_pbar"
   radar: "/radar/emulated_measurement"
-  interceptor_odom: "/interceptor/global_position/local"   # for interceptor pos,vel,Rb2e
-  interceptor_state: "/interceptor/state" # mavros state topic
+  interceptor_odom: "/mavros/global_position/local"   # for interceptor pos,vel,Rb2e
+  interceptor_state: "/mavros/state" # mavros state topic
   output_state: "/eskf_reduced/odom"
   output_pose: "/eskf_reduced/pbar"
+  output_roi: "/interceptor/camera/inference_roi"
+  output_relative_position: "/eskf_reduced/pr"
 
 timing:
   imu_rate_hz: 200
   eskf_rate_hz: 200
-  image_delay_ms: 0
-  image_timeout_sec: 2.0
+  image_delay_ms: 150
+  image_timeout_sec: 1.0
 
 delay_compensation:
   enable_extrapolation: true
@@ -38,9 +40,15 @@ camera:
   R_b2c: [0, 1, 0,
           0, 0, 1,
           1, 0, 0]
+  min_depth: 1
+  roi_distance_threshold: 40.0
+  fx: 1238.10428
+  fy: 1238.78782
+  cx: 960.0
+  cy: 540.0
 
 history:
-  buffer_length: 25
+  buffer_length: 40
 
 chi2_gating:
   enable_false_detection_image: true
@@ -52,6 +60,6 @@ chi2_gating:
 logging:
   enable: true
   rate_hz: 50.0
-  log_dir: "/home/ituarc/ros2_ws/src/eskf_cpp_reduced/log/"
-  radar_csv_dir: "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/radar"
-  camera_csv_dir: "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/camera"
+  log_dir: "/home/ituarc/ros2_ws/src/eskf_cpp_reduced/log"
+  radar_csv_dir: "/home/ituarc/Documents/Github/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/radar"
+  camera_csv_dir: "/home/ituarc/Documents/Github/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/camera"

@@ -41,7 +41,7 @@ void EskfLogger::initTerminalLog(const std::string& log_dir) {
     time_stream << std::put_time(tm, "%Y%m%d_%H%M%S");
 
     std::ostringstream filename_base;
-    filename_base << std::setw(5) << std::setfill('0') << next_counter
+    filename_base << std::setw(4) << std::setfill('0') << next_counter
                   << "_" << time_stream.str();
 
     current_filename_prefix_ = filename_base.str();
@@ -136,7 +136,7 @@ void EskfLogger::stop() {
 
 int EskfLogger::findNextCounter(const std::string& log_dir) const {
     int max_counter = 0;
-    std::regex counter_regex(R"(^(\d{5})_.*\.csv$)");
+    std::regex counter_regex(R"(^(\d{4})_.*\.log$)");
 
     try {
         if (std::filesystem::exists(log_dir) && std::filesystem::is_directory(log_dir)) {

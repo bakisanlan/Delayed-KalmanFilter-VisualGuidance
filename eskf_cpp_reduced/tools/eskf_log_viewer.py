@@ -245,39 +245,26 @@ class AnsiParser:
 
 
 def find_matching_sensor_log(eskf_csv_path: str, sensor_dir: str, tolerance_sec: int = 60) -> str:
-    """Find the corresponding radar or camera log based on timestamp."""
+    """Find the corresponding radar or camera log based on file counter."""
     csv_basename = os.path.basename(eskf_csv_path)
-    csv_match = re.search(r'(\d{8}_\d{6})\.csv', csv_basename)
+    csv_match = re.search(r'^(\d+)[_-]', csv_basename)
+
     if not csv_match:
         return ""
     
-    csv_datetime_str = csv_match.group(1)
-    try:
-        csv_dt = pd.to_datetime(csv_datetime_str, format='%Y%m%d_%H%M%S')
-    except:
-        return ""
+    csv_counter = int(csv_match.group(1))
     
     if not os.path.exists(sensor_dir):
         return ""
     
     sensor_logs = glob.glob(os.path.join(sensor_dir, "*.csv"))
     
-    best_match = ""
-    best_diff = float('inf')
-    
     for log in sensor_logs:
-        match = re.search(r'(\d{8}_\d{6})\.csv', os.path.basename(log))
-        if match:
-            try:
-                dt = pd.to_datetime(match.group(1), format='%Y%m%d_%H%M%S')
-                diff = abs((csv_dt - dt).total_seconds())
-                if diff <= tolerance_sec and diff < best_diff:
-                    best_diff = diff
-                    best_match = log
-            except:
-                continue
-    
-    return best_match
+        match = re.search(r'^(\d+)[_-]', os.path.basename(log))
+        if match and int(match.group(1)) == csv_counter:
+            return log
+            
+    return ""
 
 
 class LogViewerTab(QWidget):
@@ -546,6 +533,7 @@ class StatePlotterTab(QWidget):
             
             radar_path = find_matching_sensor_log(filepath, RADAR_CSV_DIR)
             if radar_path:
+                print('radar_path is not None')
                 self.radar_df = pd.read_csv(radar_path)
                 if 'timestamp' in self.radar_df.columns:
                     self.radar_df['time'] = self.radar_df['timestamp'] - self.eskf_t0

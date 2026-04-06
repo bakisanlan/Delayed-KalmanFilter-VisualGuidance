@@ -14,6 +14,7 @@
 #include <mavros_msgs/msg/state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/region_of_interest.hpp>
 
 #include <algorithm>
 #include <array>
@@ -81,6 +82,8 @@ public:
 
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>(params_.topic_odom, 10);
         pbar_pub_ = this->create_publisher<geometry_msgs::msg::Point>(params_.topic_pbar, 10);
+        roi_pub_ = this->create_publisher<sensor_msgs::msg::RegionOfInterest>(params_.topic_roi, 10);
+        relative_position_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>(params_.topic_relative_position, 10);
 
         diag_timer_ = this->create_wall_timer(
             1s, std::bind(&ReducedESKFNode::diagnosticsCallback, this));
@@ -88,12 +91,23 @@ public:
         samples_per_eskf_ = std::max(1, static_cast<int>(std::round(params_.dt_eskf / params_.dt_imu)));
         delay_steps_ = static_cast<int>(std::round(params_.image_delay / params_.dt_eskf));
 
+        // Validate: history buffer must be larger than delay_steps with margin
+        constexpr int kHistoryMargin = 5;
+        const int min_history = delay_steps_ + kHistoryMargin;
+        if (params_.history_length < min_history) {
+            PRINT_WARNING(YELLOW "[ESKF-RED]: history_length (%d) is too small for delay_steps (%d) + margin (%d). "
+                          "Auto-correcting to %d." RESET "\n",
+                          params_.history_length, delay_steps_, kHistoryMargin, min_history)
+            params_.history_length = min_history;
+        }
+
         PRINT_INFO(BOLDCYAN "\n[ESKF-RED]: Node initialized" RESET "\n")
         PRINT_INFO(CYAN "  IMU topic:              %s" RESET "\n", params_.topic_imu.c_str())
         PRINT_INFO(CYAN "  Interceptor odom topic: %s" RESET "\n", params_.topic_interceptor_odom.c_str())
         PRINT_INFO(CYAN "  Image topic:            %s" RESET "\n", params_.topic_image.c_str())
         PRINT_INFO(CYAN "  Radar topic:            %s" RESET "\n", params_.topic_radar.c_str())
         PRINT_INFO(CYAN "  State topic:            %s" RESET "\n", params_.topic_interceptor_state.c_str())
+        PRINT_INFO(CYAN "  Rel pos topic:          %s" RESET "\n", params_.topic_relative_position.c_str())
         PRINT_INFO(CYAN "  Samples/update:         %d" RESET "\n", samples_per_eskf_)
         PRINT_INFO(CYAN "  Image delay:            %d steps" RESET "\n", delay_steps_)
         PRINT_WARNING(YELLOW "[ESKF-RED]: Waiting for interceptor odometry and first radar measurement..." RESET "\n")
@@ -231,6 +245,14 @@ private:
             return;
         }
 
+        // Guard: reinitialize if state has diverged to NaN (rare, from pbar dynamics during agile maneuvers)
+        if (filter_->getState().hasNaN() || filter_->getCovariance().hasNaN()) {
+            PRINT_WARNING(BOLDYELLOW "[ESKF-RED]: NaN detected in filter state/covariance! Reinitializing from radar." RESET "\n")
+            initializeFilter(target_state, pending_radar_noise_);
+            pending_radar_received_ = false;
+            return;
+        }
+
         filter_->notifyRadarReceived();
         const eskf::reduced::RadarMeasurement innovation =
             filter_->correctRadar(target_state, pending_radar_noise_);
@@ -318,7 +340,7 @@ private:
 
         // 1. Initialize pbar state directly from geometry
         const eskf::Vector2d pbar_init = eskf::math::computeImageFeatures(
-            p_t_init, interceptor_state_, params_.R_b2c);
+            p_t_init, interceptor_state_, params_.R_b2c, params_.min_depth);
         x_init.segment<2>(eskf::reduced::nominal_idx::PBAR_START) = pbar_init;
 
         eskf::reduced::ErrorCovariance P_init = filter_->getCovariance();
@@ -336,7 +358,7 @@ private:
         const eskf::Vector3d p_c = eskf::math::computeTargetInCameraFrame(
             p_t_init, interceptor_state_, params_.R_b2c);
         const Eigen::Matrix2d P_pbar_proj = eskf::math::projectPositionCovarianceToPbar(
-            P_pos, p_c, interceptor_state_, params_.R_b2c);
+            P_pos, p_c, interceptor_state_, params_.R_b2c, params_.min_depth);
 
         P_init.block<2, 2>(eskf::reduced::error_idx::DPBAR_START,
                            eskf::reduced::error_idx::DPBAR_START) += P_pbar_proj;
@@ -414,6 +436,41 @@ private:
         pbar_msg.z = 0.0;
         pbar_pub_->publish(pbar_msg);
 
+        const double sigma_x = std::sqrt(cov_diag(eskf::reduced::error_idx::DPBAR_START + 0));
+        const double sigma_y = std::sqrt(cov_diag(eskf::reduced::error_idx::DPBAR_START + 1));
+        
+        // pbar gives normalized coordinates. Convert normalized bounds to pixel coordinates:
+        const double min_x_norm = pbar(0) - 3.0 * sigma_x;
+        const double min_y_norm = pbar(1) - 3.0 * sigma_y;
+        const double width_norm = 6.0 * sigma_x;
+        const double height_norm = 6.0 * sigma_y;
+
+        const double min_x_pixel = min_x_norm * params_.fx + params_.cx;
+        const double min_y_pixel = min_y_norm * params_.fy + params_.cy;
+        const double width_pixel = width_norm * params_.fx;
+        const double height_pixel = height_norm * params_.fy;
+
+        sensor_msgs::msg::RegionOfInterest roi_msg;
+        roi_msg.x_offset = static_cast<uint32_t>(std::max(0.0, std::round(min_x_pixel)));
+        roi_msg.y_offset = static_cast<uint32_t>(std::max(0.0, std::round(min_y_pixel)));
+        roi_msg.width = static_cast<uint32_t>(std::max(0.0, std::round(width_pixel)));
+        roi_msg.height = static_cast<uint32_t>(std::max(0.0, std::round(height_pixel)));
+        
+        const double distance = (pos - interceptor_state_.position_ned).norm();
+        roi_msg.do_rectify = !(distance < params_.roi_distance_threshold);   // this is a boolean paramter for roi will be used or not 
+        
+        roi_pub_->publish(roi_msg);
+
+        // Publish relative position reconstructed from pbar + depth + rotations
+        const eskf::Vector3d rel_pos = filter_->getRelativePosition(interceptor_state_);
+        geometry_msgs::msg::PointStamped rel_pos_msg;
+        rel_pos_msg.header.stamp = stamp;
+        rel_pos_msg.header.frame_id = "ned";
+        rel_pos_msg.point.x = rel_pos(0);
+        rel_pos_msg.point.y = rel_pos(1);
+        rel_pos_msg.point.z = rel_pos(2);
+        relative_position_pub_->publish(rel_pos_msg);
+
         if (logger_.isLogging()) {
             double timestamp = stamp.seconds();
             logger_.logState(timestamp, filter_->getState(), filter_->getCovariance());
@@ -472,6 +529,8 @@ private:
     rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr interceptor_state_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr pbar_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::RegionOfInterest>::SharedPtr roi_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr relative_position_pub_;
     rclcpp::TimerBase::SharedPtr diag_timer_;
 
     eskf::reduced::InterceptorState interceptor_state_;

@@ -8,7 +8,7 @@ echo "Starting ESKF initialization sequence..."
 # Camera and radar sensor initialization
 echo "Starting camera and radar sensor initialization..."
 (
-    cd /home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators
+    cd /home/ituarc/Documents/Github/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators
     source install/setup.sh
     ros2 launch interceptor_sensor_emulators interceptor_emulators.launch.py
 ) &

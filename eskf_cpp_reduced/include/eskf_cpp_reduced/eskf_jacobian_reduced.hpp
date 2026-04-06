@@ -24,6 +24,7 @@ ReducedESKFJacobians computeReducedESKFJacobians(
     const RotationMatrix& R_b2c,
     const RotationMatrix& R_b2e,
     const Vector3d& p_i,
-    const Vector3d& v_i);
+    const Vector3d& v_i,
+    double min_depth);
 
 }  // namespace eskf::reduced
