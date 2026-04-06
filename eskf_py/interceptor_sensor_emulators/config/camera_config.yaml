@@ -19,10 +19,10 @@
 
     # ----- Imperfections -----
     max_range: 100.0                # Max detection range in meters
-    false_detection_prob: 0.1       # Probability (0-1) of generating a false detection instead of true target
-    dropout_prob_at_max_range: 0.3  # Dropout probability at max range. Increases linearly from 0 at range 0.
-    delay_ms: 80                    # Simulated camera detection delay in milliseconds
-    log_dir: "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/camera"
+    false_detection_prob: 0.05       # Probability (0-1) of generating a false detection instead of true target
+    dropout_prob_at_max_range: 0.0  # Dropout probability at max range. Increases linearly from 0 at range 0.
+    delay_ms: 1                     # Simulated camera detection delay in milliseconds
+    log_dir: "/home/ituarc/Documents/Github/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/camera"
 
     # ----- Rate -----
     rate_hz: 30.0
@@ -31,9 +31,9 @@
     visualize_target: false
 
     # ----- Topics (override via launch or CLI) -----
-    interceptor_lla_topic: /interceptor/global_position/global
-    target_lla_topic: /target/global_position/global
-    interceptor_local_odom_topic: /interceptor/global_position/local
-    state_topic: /interceptor/state
-    target_pixel_topic: /interceptor/camera/target_pbar
+    interceptor_lla_topic: /mavros/global_position/global
+    target_lla_topic: /target/telemetry/state
+    interceptor_local_odom_topic: /mavros/global_position/local
+    state_topic: /mavros/state
+    target_pixel_topic: /interceptor/camera/target_pbar_
     target_pixel_true_topic: /interceptor/camera/target_pbar_true

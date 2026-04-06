@@ -1,8 +1,8 @@
 /radar_emulator_node:
   ros__parameters:
     target_state_topic: "/target/telemetry/state"
-    home_position_topic: "/interceptor/home_position/home"
-    state_topic: "/interceptor/state"   #for arm and disarm state
+    home_position_topic: "/mavros/home_position/home"
+    state_topic: "/mavros/state"   #for arm and disarm state
     odom_topic: "/radar/emulated_measurement"
     frame_id: "ref_ned"
     child_frame_id: "radar_target"
@@ -15,4 +15,4 @@
     rmse_elevation_deg: 3.3
     rmse_doppler: 0.5
     random_seed: -1
-    log_dir: "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/radar"
+    log_dir: "/home/ituarc/Documents/Github/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/radar"

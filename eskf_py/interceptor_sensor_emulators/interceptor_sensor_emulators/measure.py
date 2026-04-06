@@ -74,7 +74,7 @@ def measure(
     max_range: float = 100.0,
     false_detection_prob: float = 0.0,
     dropout_prob_at_max_range: float = 0.0,
-) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]], dict]:
     """
     Compute the target pixel location as seen by the interceptor's camera.
 
@@ -85,9 +85,10 @@ def measure(
 
     Returns
     -------
-    (pbar_meas, pbar_true) : 
+    (pbar_meas, pbar_true, info_dict)
         pbar_meas: Noisy/imperfect pixel coordinates if detected (or randomly generated), else None.
         pbar_true: Perfect target coordinates if mathematically inside the FOV, else None.
+        info_dict: Dictionary containing extra tracking info like 'dist' and 'p_cam'.
     """
     pbar_true = None
     pbar_meas = None
@@ -134,4 +135,8 @@ def measure(
         pbar_meas = ((u_fd - camera.cx) / camera.fx,
                      (v_fd - camera.cy) / camera.fy)
 
-    return (pbar_meas, pbar_true)
+    info_dict = {
+        'dist': dist,
+        'p_cam': p_cam,
+    }
+    return pbar_meas, pbar_true, info_dict

@@ -10,7 +10,8 @@ import datetime
 import glob
 import os
 import numpy as np
-import cv2
+import json
+import re
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
@@ -20,6 +21,8 @@ from sensor_msgs.msg import NavSatFix
 from geometry_msgs.msg import PointStamped, Point
 from nav_msgs.msg import Odometry
 from mavros_msgs.msg import State
+from std_msgs.msg import String
+
 
 from .camera_model import PinholeRadtanCamera
 from .measure import measure, mavros_enu_flu_to_ned_frd_rotation
@@ -27,6 +30,17 @@ from .measure import measure, mavros_enu_flu_to_ned_frd_rotation
 
 class CameraEmulatorNode(Node):
     """Emulates a forward-looking pinhole+radtan camera on the interceptor."""
+    
+    
+    
+    _ALIASES = {
+        'lat': ('lat', 'latitude'),
+        'lon': ('lon', 'lng', 'longitude'),
+        'alt': ('alt', 'altitude'),
+        'vn': ('vn', 'v_n', 'vel_n', 'velocity_north', 'north_velocity','vx'),
+        've': ('ve', 'v_e', 'vel_e', 'velocity_east', 'east_velocity','vy'),
+        'vd': ('vd', 'v_d', 'vel_d', 'velocity_down', 'down_velocity','vz'),
+    }
 
     def __init__(self):
         super().__init__('camera_emulator_node')
@@ -133,6 +147,7 @@ class CameraEmulatorNode(Node):
         # State variables (latest received data)
         # ------------------------------------------------------------------ #
         self._interceptor_lla = None  # (lat, lon, alt)
+        self._interceptor_altitude_up = None
         self._target_lla = None       # (lat, lon, alt)
         self._R_body2ned = None       # 3×3
         self._eskf_pbar = None        # (px, py)
@@ -156,9 +171,15 @@ class CameraEmulatorNode(Node):
         self.create_subscription(
             NavSatFix, interceptor_lla_topic,
             self._interceptor_lla_cb, sensor_qos)
+        # self.create_subscription(
+        #     NavSatFix, target_lla_topic,
+        #     self._target_lla_cb, sensor_qos)        
         self.create_subscription(
-            NavSatFix, target_lla_topic,
-            self._target_lla_cb, sensor_qos)
+            String,
+            target_lla_topic,
+            self._target_state_callback,
+            10,
+        )
         self.create_subscription(
             Odometry, interceptor_local_odom_topic,
             self._interceptor_local_odom_cb, sensor_qos)
@@ -167,7 +188,7 @@ class CameraEmulatorNode(Node):
             self._eskf_pbar_cb, 10)
         self.create_subscription(
             State, state_topic,
-            self._state_callback, sensor_qos)
+            self._state_callback, 10)
 
         self._log_info(
             f'Subscribed to:\n'
@@ -186,7 +207,6 @@ class CameraEmulatorNode(Node):
         self.pixel_true_pub = self.create_publisher(
             PointStamped, target_pixel_true_topic, 10)
         self._log_info(f'Publishing target pbar on: {target_pixel_topic}')
-        self._log_info(f'Publishing true target pbar on: {target_pixel_true_topic}')
 
         # ------------------------------------------------------------------ #
         # Timer
@@ -194,7 +214,7 @@ class CameraEmulatorNode(Node):
         period = 1.0 / rate_hz
         self.create_timer(period, self._timer_cb)
         self._log_info(f'Timer running at {rate_hz} Hz')
-
+                
         # Queue for delayed publishing
         self._publish_queue = []
         self.create_timer(0.01, self._process_publish_queue)  # 100 Hz queue processor
@@ -215,6 +235,7 @@ class CameraEmulatorNode(Node):
                     max_count = max(max_count, int(parts[0]))
             
             next_count = max_count + 1
+            self._log_counter = next_count
             now_str = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"{next_count:04d}-{now_str}.log"
             filepath = os.path.join(self._log_dir, filename)
@@ -256,17 +277,18 @@ class CameraEmulatorNode(Node):
     def _start_logging(self):
         try:
             os.makedirs(self._log_dir, exist_ok=True)
-            existing_files = glob.glob(os.path.join(self._log_dir, '*-*.csv'))
-            max_count = 0
+            
+            eskf_log_dir = '/home/ituarc/ros2_ws/src/eskf_cpp_reduced/log'
+            existing_files = glob.glob(os.path.join(eskf_log_dir, '*-*.log'))
+            counter = 0
             for f in existing_files:
                 basename = os.path.basename(f)
                 parts = basename.split('-')
                 if len(parts) >= 2 and parts[0].isdigit():
-                    max_count = max(max_count, int(parts[0]))
+                    counter = max(counter, int(parts[0]))
             
-            next_count = max_count + 1
             now_str = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"{next_count:04d}-{now_str}.csv"
+            filename = f"{counter:04d}-{now_str}.csv"
             filepath = os.path.join(self._log_dir, filename)
             
             self._csv_file = open(filepath, 'w', newline='')
@@ -293,12 +315,41 @@ class CameraEmulatorNode(Node):
             self._csv_writer = None
 
     def _interceptor_lla_cb(self, msg: NavSatFix):
-        self._interceptor_lla = (msg.latitude, msg.longitude, msg.altitude)
+        # self._log_info(f'deneme1')
+        altitude = (
+            self._interceptor_altitude_up
+            if self._interceptor_altitude_up is not None
+            else msg.altitude
+        )
+        self._interceptor_lla = (msg.latitude, msg.longitude, altitude)
 
-    def _target_lla_cb(self, msg: NavSatFix):
-        self._target_lla = (msg.latitude, msg.longitude, msg.altitude)
+    # def _target_lla_cb(self, msg: NavSatFix):
+    #     self._target_lla = (msg.latitude, msg.longitude, msg.altitude)
+    
+    def _target_state_callback(self, msg: String):
+        target_lla, _ = self._parse_target_state(msg.data)
+        if target_lla is None:
+            self._warn_throttled(
+                'parse',
+                'Target state does not contain valid lat/lon/alt fields.',
+            )
+            return
+        
+        # self._log_info(f'deneme2')
+
+        self._target_lla = target_lla
+    
 
     def _interceptor_local_odom_cb(self, msg: Odometry):
+        # self._log_info(f'deneme3')
+        self._interceptor_altitude_up = msg.pose.pose.position.z
+        if self._interceptor_lla is not None:
+            self._interceptor_lla = (
+                self._interceptor_lla[0],
+                self._interceptor_lla[1],
+                self._interceptor_altitude_up,
+            )
+
         q = msg.pose.pose.orientation
         if q.x == 0.0 and q.y == 0.0 and q.z == 0.0 and q.w == 0.0:
             return
@@ -322,7 +373,7 @@ class CameraEmulatorNode(Node):
 
 
         # Compute pixel
-        result_meas, result_true = measure(
+        result_meas, result_true, info_dict = measure(
             camera=self.camera,
             interceptor_lla=self._interceptor_lla,
             target_lla=self._target_lla,
@@ -330,6 +381,15 @@ class CameraEmulatorNode(Node):
             max_range=self.max_range,
             false_detection_prob=self.false_detection_prob,
             dropout_prob_at_max_range=self.dropout_prob_at_max_range,
+        )
+        dist = info_dict.get('dist')
+        p_cam = info_dict.get('p_cam')
+
+        fmt_pt = lambda p: f"({p[0]:.3f}, {p[1]:.3f})" if p is not None else "None"
+        fmt_vec = lambda v: f"[{v[0]:.2f}, {v[1]:.2f}, {v[2]:.2f}]" if v is not None else "None"
+        self._log_info(
+            f"Target dist: {dist:.1f}m, p_cam: {fmt_vec(p_cam)}, "
+            f"pbar_true: {fmt_pt(result_true)}, pbar_meas: {fmt_pt(result_meas)}"
         )
 
         # Publish measured detection (with noise, dropout, and false detection)
@@ -377,6 +437,49 @@ class CameraEmulatorNode(Node):
             _, msg_meas = self._publish_queue.pop(0)
             if msg_meas is not None:
                 self.pixel_pub.publish(msg_meas)
+                
+                
+    def _extract_numeric(self, raw: str, aliases) -> float | None:
+        for alias in aliases:
+            pattern = rf'"?{re.escape(alias)}"?\s*:?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)'
+            match = re.search(pattern, raw, flags=re.IGNORECASE)
+            if match:
+                return float(match.group(1))
+        return None
+
+    def _extract_value(self, data: dict, raw: str, key: str) -> float | None:
+        aliases = self._ALIASES[key]
+        for alias in aliases:
+            if alias in data:
+                return float(data[alias])
+        return self._extract_numeric(raw, aliases)
+                
+                
+    def _parse_target_state(self, raw: str):
+        try:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                data = {str(key).lower(): value for key, value in payload.items()}
+            else:
+                data = {}
+        except json.JSONDecodeError:
+            data = {}
+
+        lat = self._extract_value(data, raw, 'lat')
+        lon = self._extract_value(data, raw, 'lon')
+        alt = self._extract_value(data, raw, 'alt')
+        if lat is None or lon is None or alt is None:
+            return None, None
+
+        reported_vel = None
+        vn = self._extract_value(data, raw, 'vn')
+        ve = self._extract_value(data, raw, 've')
+        vd = self._extract_value(data, raw, 'vd')
+
+        if vn is not None and ve is not None and vd is not None:
+            reported_vel = np.array([vn, ve, vd], dtype=float)
+
+        return np.array([lat, lon, alt], dtype=float), reported_vel
 
 
 

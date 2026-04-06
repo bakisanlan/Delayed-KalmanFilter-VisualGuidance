@@ -27,4 +27,20 @@ def generate_launch_description():
         parameters=[radar_config],
     )
 
-    return LaunchDescription([camera_node, radar_node])
+    bridge_node = Node(
+        package='interceptor_sensor_emulators',
+        executable='target_state_bridge',
+        name='target_state_bridge',
+        output='screen',
+        parameters=[bridge_config],
+    )
+
+    visualization_node = Node(
+        package='interceptor_sensor_emulators',
+        executable='visualization_node',
+        name='visualization_node',
+        output='screen',
+        parameters=[camera_config],
+    )
+
+    return LaunchDescription([camera_node, radar_node, bridge_node, visualization_node])
