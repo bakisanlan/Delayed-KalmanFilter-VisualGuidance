@@ -6,12 +6,14 @@ topics:
   interceptor_state: "/interceptor/state" # mavros state topic
   output_state: "/eskf_reduced/odom"
   output_pose: "/eskf_reduced/pbar"
+  output_roi: "/interceptor/camera/inference_roi"
+  output_relative_position: "/eskf_reduced/pr"
 
 timing:
   imu_rate_hz: 200
   eskf_rate_hz: 200
-  image_delay_ms: 0
-  image_timeout_sec: 2.0
+  image_delay_ms: 80.0
+  image_timeout_sec: 1.0
 
 delay_compensation:
   enable_extrapolation: true
@@ -38,9 +40,15 @@ camera:
   R_b2c: [0, 1, 0,
           0, 0, 1,
           1, 0, 0]
-
+  min_depth: 1.0
+  roi_distance_threshold: 400.0
+  fx: 629.8477
+  fy: 629.7639
+  cx: 492.1117
+  cy: 277.6097
+          
 history:
-  buffer_length: 25
+  buffer_length: 40
 
 chi2_gating:
   enable_false_detection_image: true

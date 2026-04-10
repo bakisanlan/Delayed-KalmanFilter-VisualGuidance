@@ -25,8 +25,8 @@ namespace math {
  * @param z Depth value
  * @return Safely bounded depth parameter
  */
-inline double boundDepth(double z) {
-    return z >= 0.0 ? std::max(z, constants::MIN_DEPTH) : std::min(z, -constants::MIN_DEPTH);
+inline double boundDepth(double z, double min_depth) {
+    return z >= 0.0 ? std::max(z, min_depth) : std::min(z, -min_depth);
 }
 
 // ============================================================================
@@ -248,9 +248,10 @@ inline Vector3d computeTargetInCameraFrame(const Vector3d& p_t,
  */
 inline Vector2d computeImageFeatures(const Vector3d& p_t,
                                      const reduced::InterceptorState& interceptor,
-                                     const RotationMatrix& R_b2c) {
+                                     const RotationMatrix& R_b2c,
+                                     double min_depth) {
     const Vector3d p_c = computeTargetInCameraFrame(p_t, interceptor, R_b2c);
-    const double p_c_z = boundDepth(p_c(2));
+    const double p_c_z = boundDepth(p_c(2), min_depth);
     return Vector2d(p_c(0) / p_c_z, p_c(1) / p_c_z);
 }
 
@@ -266,8 +267,9 @@ inline Vector2d computeImageFeatures(const Vector3d& p_t,
 inline Eigen::Matrix2d projectPositionCovarianceToPbar(const Eigen::Matrix3d& P_pos,
                                                        const Vector3d& p_c,
                                                        const reduced::InterceptorState& interceptor,
-                                                       const RotationMatrix& R_b2c) {
-    const double p_c_z = boundDepth(p_c(2));
+                                                       const RotationMatrix& R_b2c,
+                                                       double min_depth) {
+    const double p_c_z = boundDepth(p_c(2), min_depth);
     Eigen::Matrix<double, 2, 3> J_c;
     J_c << 1.0 / p_c_z, 0.0, -p_c(0) / (p_c_z * p_c_z),
            0.0, 1.0 / p_c_z, -p_c(1) / (p_c_z * p_c_z);

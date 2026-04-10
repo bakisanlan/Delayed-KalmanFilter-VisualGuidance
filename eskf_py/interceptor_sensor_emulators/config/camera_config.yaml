@@ -28,7 +28,8 @@
     rate_hz: 30.0
 
     # ----- Visualization -----
-    visualize_target: false
+    visualize_target: true
+    show_2d_trajectory_plot: false
 
     # ----- Topics (override via launch or CLI) -----
     interceptor_lla_topic: /interceptor/global_position/global

@@ -21,9 +21,6 @@ namespace constants {
     /// Unit vector in z-direction (gravity direction in NED)
     inline const Vector3d E3{0.0, 0.0, 1.0};
 
-    /// Minimum camera depth to prevent division by zero [m]
-    constexpr double MIN_DEPTH = 0.1;
-    
     /// Small angle threshold for numerical stability
     constexpr double SMALL_ANGLE_THRESHOLD = 1e-10;
 }
@@ -39,6 +36,8 @@ struct ESKFParams {
     std::string topic_interceptor_state = "/interceptor/state";
     std::string topic_odom = "/eskf_reduced/odom";
     std::string topic_pbar = "/eskf_reduced/pbar";
+    std::string topic_roi = "/eskf_reduced/roi";
+    std::string topic_relative_position = "/eskf_reduced/relative_position";
     
     double dt_imu = 1.0 / 200.0;
     double dt_eskf = 1.0 / 200.0;
@@ -68,11 +67,19 @@ struct ESKFParams {
     double chi2_threshold_radar_6dof = 27.86;
     bool use_vr = false;
     bool radar_measurement_is_relative = false;
-
+    
     // Delay compensation
     bool enable_image_extrapolation = false; ///< true = Method 2 (extrapolate), false = Method 1 (repropagate)
 
     double sigma_target_rw = 1.5;
+    
+    double min_depth = 0.1;
+    double roi_distance_threshold = 100.0;
+    
+    double fx = 1000.0;
+    double fy = 1000.0;
+    double cx = 320.0;
+    double cy = 240.0;
     
     bool log_enabled = false;
     double log_rate_hz = 20.0;

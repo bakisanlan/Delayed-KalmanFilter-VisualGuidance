@@ -8,6 +8,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from geometry_msgs.msg import PointStamped, Point
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import RegionOfInterest
 # Add other message types if needed for Est target topics
 
 class VisualizationNode(Node):
@@ -27,11 +28,13 @@ class VisualizationNode(Node):
         self.declare_parameter('cy', 240.0)
         self.declare_parameter('rate_hz', 30.0)
         self.declare_parameter('visualize_target', True)
+        self.declare_parameter('show_2d_trajectory_plot', True)
 
         # Topic names
         self.declare_parameter('target_pixel_topic', '/interceptor/camera/target_pbar')
         self.declare_parameter('target_pixel_true_topic', '/interceptor/camera/target_pbar_true')
         self.declare_parameter('eskf_pbar_topic', '/eskf_reduced/pbar')
+        self.declare_parameter('inference_roi_topic', '/interceptor/camera/inference_roi')
         
         # Estimated target from ESKF (NED frame):
         self.declare_parameter('gps_target_topic', '/target/global_position/local')  
@@ -48,10 +51,12 @@ class VisualizationNode(Node):
         self.cy = self.get_parameter('cy').value
         rate_hz = self.get_parameter('rate_hz').value
         self.visualize_target = self.get_parameter('visualize_target').value
+        self.show_2d_trajectory_plot = self.get_parameter('show_2d_trajectory_plot').value
 
         target_pixel_topic = self.get_parameter('target_pixel_topic').value
         target_pixel_true_topic = self.get_parameter('target_pixel_true_topic').value
         eskf_pbar_topic = self.get_parameter('eskf_pbar_topic').value
+        inference_roi_topic = self.get_parameter('inference_roi_topic').value
         gps_target_topic = self.get_parameter('gps_target_topic').value
         est_target_topic = self.get_parameter('est_target_topic').value
 
@@ -61,11 +66,13 @@ class VisualizationNode(Node):
         self._target_pbar_meas = None # (px, py) Imperfect Measurement
         self._target_pbar_true = None # (px, py) Ground truth
         self._eskf_pbar = None    # (px, py) Estimated
+        self._inference_roi = None # RegionOfInterest message
 
         # Trajectory history for 2D plots
         self.gps_trajectory = [] # List of (x, y, z)
         self.est_trajectory = [] # List of (x, y, z)
         self._windows_open = False
+        self._2d_plots_opened = False
 
         # Plot parameters
         self.plot_size = 500
@@ -83,6 +90,7 @@ class VisualizationNode(Node):
         self.create_subscription(PointStamped, target_pixel_topic, self._target_pixel_meas_cb, sensor_qos)
         self.create_subscription(PointStamped, target_pixel_true_topic, self._target_pixel_true_cb, sensor_qos)
         self.create_subscription(Point, eskf_pbar_topic, self._eskf_pbar_cb, 10)
+        self.create_subscription(RegionOfInterest, inference_roi_topic, self._inference_roi_cb, sensor_qos)
         
         self.create_subscription(Odometry, gps_target_topic, self._gps_target_cb, sensor_qos)
         self.create_subscription(Odometry, est_target_topic, self._est_target_cb, sensor_qos)
@@ -107,6 +115,9 @@ class VisualizationNode(Node):
 
     def _eskf_pbar_cb(self, msg: Point):
         self._eskf_pbar = (msg.x, msg.y)
+
+    def _inference_roi_cb(self, msg: RegionOfInterest):
+        self._inference_roi = msg
 
     def _gps_target_cb(self, msg: Odometry):
         # Extract ENU position and convert to NED
@@ -143,8 +154,22 @@ class VisualizationNode(Node):
             
         self._windows_open = True
         self._render_camera_view()
-        self._render_horizontal_plot()
-        self._render_vertical_plot()
+        
+        # Optionally show 2D trajectory plot
+        self.show_2d_trajectory_plot = self.get_parameter('show_2d_trajectory_plot').value
+        if self.show_2d_trajectory_plot:
+            self._render_horizontal_plot()
+            self._render_vertical_plot()
+            self._2d_plots_opened = True
+        elif self._2d_plots_opened:
+            # If windows might be open from previous runs and toggle is turned off
+            try:
+                cv2.destroyWindow("Horizontal Plot")
+                cv2.destroyWindow("Vertical Plot")
+            except cv2.error:
+                pass
+            self._2d_plots_opened = False
+            
         cv2.waitKey(1)
 
     def _render_camera_view(self):
@@ -160,6 +185,13 @@ class VisualizationNode(Node):
                 center = (u_pixel, v_pixel)
                 
                 cv2.circle(img, center, 6, (0, 255, 255), -1) # Yellow circle
+
+        # Plot Uncertainty Rectangle (Inference ROI)
+        if self._inference_roi is not None:
+            roi = self._inference_roi
+            pt1 = (roi.x_offset, roi.y_offset)
+            pt2 = (roi.x_offset + roi.width, roi.y_offset + roi.height)
+            cv2.rectangle(img, pt1, pt2, (255, 255, 0), 2)  # Cyan colour (BGR)
 
         # Plot Perfect Ground Truth Target
         if self._target_pbar_true is not None:

@@ -66,6 +66,8 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
         params.topic_interceptor_state = getScalar<std::string>(topics, "interceptor_state", "/interceptor/state");
         params.topic_odom = getScalar<std::string>(topics, "output_state", "/eskf_reduced/odom");
         params.topic_pbar = getScalar<std::string>(topics, "output_pose", "/eskf_reduced/pbar");
+        params.topic_roi = getScalar<std::string>(topics, "output_roi", "/eskf_reduced/roi");
+        params.topic_relative_position = getScalar<std::string>(topics, "output_relative_position", "/eskf_reduced/relative_position");
     }
     
     // === Timing Parameters ===
@@ -121,9 +123,17 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
         params.init_sigma_pbar = getScalar<double>(init, "pbar", 0.1);
     }
     
-    // === Camera Transform ===
-    if (config["camera"] && config["camera"]["R_b2c"]) {
-        params.R_b2c = parseRotationMatrix(config["camera"]["R_b2c"]);
+    // === Camera configuration ===
+    if (config["camera"]) {
+        if (config["camera"]["R_b2c"]) {
+            params.R_b2c = parseRotationMatrix(config["camera"]["R_b2c"]);
+        }
+        params.min_depth = getScalar<double>(config["camera"], "min_depth", 0.1);
+        params.roi_distance_threshold = getScalar<double>(config["camera"], "roi_distance_threshold", 100.0);
+        params.fx = getScalar<double>(config["camera"], "fx", 1000.0);
+        params.fy = getScalar<double>(config["camera"], "fy", 1000.0);
+        params.cx = getScalar<double>(config["camera"], "cx", 320.0);
+        params.cy = getScalar<double>(config["camera"], "cy", 240.0);
     }
     
     // === Chi-Square Gating ===
@@ -169,7 +179,16 @@ void printConfig(const ESKFParams& params) {
     PRINT_INFO(CYAN "  Radar vel: %.2f m/s" RESET "\n", params.sigma_radar_vel)
     PRINT_INFO(CYAN "  Radar inf: %.2f" RESET "\n", params.radar_noise_inflation)
     PRINT_INFO(CYAN "  Target rw: %.3f m/s^2" RESET "\n", params.sigma_target_rw)
+    PRINT_INFO(CYAN "  Min depth: %.2f m" RESET "\n", params.min_depth)
+    PRINT_INFO(CYAN "  ROI Dist Thr: %.1f m" RESET "\n", params.roi_distance_threshold)
+    PRINT_INFO(CYAN "  Camera K:  fx=%.1f fy=%.1f cx=%.1f cy=%.1f" RESET "\n", 
+               params.fx, params.fy, params.cx, params.cy)
     
+    PRINT_INFO(BOLDWHITE "\nRadar:" RESET "\n")
+    PRINT_INFO(CYAN "  Use vr:    %s" RESET "\n", params.use_vr ? GREEN "yes" RESET : RED "no" RESET)
+    PRINT_INFO(CYAN "  Relative:  %s" RESET "\n", params.radar_measurement_is_relative ? GREEN "yes" RESET : RED "no" RESET)
+    
+ 
     PRINT_INFO(BOLDWHITE "\nRadar:" RESET "\n")
     PRINT_INFO(CYAN "  Use vr:    %s" RESET "\n", params.use_vr ? GREEN "yes" RESET : RED "no" RESET)
     PRINT_INFO(CYAN "  Relative:  %s" RESET "\n", params.radar_measurement_is_relative ? GREEN "yes" RESET : RED "no" RESET)
@@ -179,7 +198,7 @@ void printConfig(const ESKFParams& params) {
     PRINT_INFO(CYAN "  Method:             %s" RESET "\n",
                params.enable_image_extrapolation
                    ? GREEN "Extrapolation (Method 2)" RESET
-                   : YELLOW "None (no compensation)" RESET)
+                   : YELLOW "None (no compensation)" RESET) 
 
     PRINT_INFO(BOLDWHITE "\nTopics:" RESET "\n")
     PRINT_INFO(CYAN "  IMU:             %s" RESET "\n", params.topic_imu.c_str())
@@ -189,6 +208,8 @@ void printConfig(const ESKFParams& params) {
     PRINT_INFO(CYAN "  Interceptor state:%s" RESET "\n", params.topic_interceptor_state.c_str())
     PRINT_INFO(CYAN "  Output odom:     %s" RESET "\n", params.topic_odom.c_str())
     PRINT_INFO(CYAN "  Output pbar:     %s" RESET "\n", params.topic_pbar.c_str())
+    PRINT_INFO(CYAN "  Output roi:      %s" RESET "\n", params.topic_roi.c_str())
+    PRINT_INFO(CYAN "  Output rel pos:  %s" RESET "\n", params.topic_relative_position.c_str())
     
     
     PRINT_INFO(BOLDWHITE "\nInitial Covariance (1-sigma):" RESET "\n")

@@ -38,7 +38,10 @@ public:
     bool wasRadarReceived() const { return radar_received_; }
     bool wasImageReceived() const { return first_image_received_; }
 
-    void setPbarFrozen(bool frozen) { pbar_frozen_ = frozen; }
+    void setPbarFrozen(bool frozen) {
+        pbar_frozen_ = frozen;
+        if (!frozen) steps_since_unfreeze_ = 0;  // reset: history not yet trustworthy
+    }
     bool isPbarFrozen() const { return pbar_frozen_; }
 
     const NominalState& getState() const { return x_; }
@@ -49,6 +52,7 @@ public:
     Vector3d getTargetPosition() const { return state_access::getPosition(x_); }
     Vector3d getTargetVelocity() const { return state_access::getVelocity(x_); }
     Vector2d getPbar() const { return state_access::getPbar(x_); }
+    Vector3d getRelativePosition(const reduced::InterceptorState& interceptor) const;
 
     Eigen::Matrix<double, 8, 1> getCovarianceDiagonal() const { return P_.diagonal(); }
 
@@ -119,6 +123,7 @@ private:
     bool radar_received_ = false;
     bool first_image_received_ = false;
     bool pbar_frozen_ = true;
+    int  steps_since_unfreeze_ = 0;
 };
 
 NominalState createInitialState(const Vector3d& p_t_true,
