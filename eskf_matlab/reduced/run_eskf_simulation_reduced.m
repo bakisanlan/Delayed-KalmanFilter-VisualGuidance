@@ -3,6 +3,7 @@
 % The interceptor pose and velocity are treated as known inputs.
 
 clear; clc; close all;
+addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'common'));
 rng(32)
 
 %% ======================== SIMULATION PARAMETERS ========================

@@ -9,7 +9,7 @@
 % by Kun Yang et al.
 
 clear; clc; close all;
-
+addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'common'));
 %% ======================== SIMULATION PARAMETERS ========================
 dt_imu = 1/200;           % IMU update rate: 200 Hz
 N_steps = 40000;            % Number of steps for Gramian computation

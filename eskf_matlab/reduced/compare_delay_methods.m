@@ -9,6 +9,7 @@
 % The RNG seed and all truth parameters are identical across both runs.
 
 clear; clc; close all;
+addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'common'));
 
 %% ======================== SIMULATION PARAMETERS ========================
 dt_imu  = 1/200;

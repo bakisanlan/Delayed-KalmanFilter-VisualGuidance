@@ -7,6 +7,7 @@
 % Purpose: Observe how the filter handles camera sensor failure and recovery
 
 clear; clc; close all;
+addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'common'));
 rng(42)  % Different seed for reproducibility
 
 %% ======================== SIMULATION PARAMETERS ========================

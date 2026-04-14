@@ -19,6 +19,7 @@
 %   - plot_eskf_results.m      : Visualization functions
 
 clear; clc; close all;
+addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'common'));
 rng(32)
 
 %% ======================== SIMULATION PARAMETERS ========================
