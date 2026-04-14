@@ -13,3 +13,4 @@
 /eskf_py/interceptor_sensor_emulators/build
 /eskf_py/interceptor_sensor_emulators/install
 /eskf_py/interceptor_sensor_emulators/log
+/.agent
