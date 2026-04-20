@@ -70,8 +70,8 @@ private:
     void repropagate(const NominalState& x_start,
                      const ErrorCovariance& P_start,
                      size_t idx_start);
-
-    /**
+                     
+     /**
      * @brief Method 2: Measurement Extrapolation.
      *
      * Forward-predicts the delayed pixel measurement z_d = pbar(k-D) to the

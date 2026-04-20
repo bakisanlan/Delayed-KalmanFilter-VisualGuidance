@@ -83,9 +83,7 @@ public:
 
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>(params_.topic_odom, 10);
         pbar_pub_ = this->create_publisher<geometry_msgs::msg::Point>(params_.topic_pbar, 10);
-        pbar_uncertainty_pub_ = this->create_publisher<geometry_msgs::msg::Point>(params_.topic_pbar_uncertainty, 10);
         roi_pub_ = this->create_publisher<sensor_msgs::msg::RegionOfInterest>(params_.topic_roi, 10);
-        dynamic_roi_pub_ = this->create_publisher<sensor_msgs::msg::RegionOfInterest>(params_.topic_roi_dynamic, 10);
         relative_position_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>(params_.topic_relative_position, 10);
         zoom_out_pub_ = this->create_publisher<std_msgs::msg::Bool>(params_.topic_zoom_out, 10);
 
@@ -464,12 +462,6 @@ private:
 
         const double sigma_x = std::sqrt(cov_diag(eskf::reduced::error_idx::DPBAR_START + 0));
         const double sigma_y = std::sqrt(cov_diag(eskf::reduced::error_idx::DPBAR_START + 1));
-
-        geometry_msgs::msg::Point pbar_unc_msg;
-        pbar_unc_msg.x = 3.0 * sigma_x;
-        pbar_unc_msg.y = 3.0 * sigma_y;
-        pbar_unc_msg.z = 0.0;
-        pbar_uncertainty_pub_->publish(pbar_unc_msg);
         
         const double distance = (pos - interceptor_state_.position_ned).norm();
 
@@ -481,16 +473,16 @@ private:
         const double active_cx = use_cam2 ? params_.cx2 : params_.cx;
         const double active_cy = use_cam2 ? params_.cy2 : params_.cy;
 
-        // Fixed ROI size
-        const double width_pixel = 1280.0;
-        const double height_pixel = 1280.0;
+        // pbar gives normalized coordinates. Convert normalized bounds to pixel coordinates:
+        const double min_x_norm = pbar(0) - 3.0 * sigma_x;
+        const double min_y_norm = pbar(1) - 3.0 * sigma_y;
+        const double width_norm = 6.0 * sigma_x;
+        const double height_norm = 6.0 * sigma_y;
 
-        // pbar gives normalized coordinates. Convert normalized center to pixel coordinates:
-        const double center_x_pixel = pbar(0) * active_fx + active_cx;
-        const double center_y_pixel = pbar(1) * active_fy + active_cy;
-
-        const double min_x_pixel = center_x_pixel - width_pixel / 2.0;
-        const double min_y_pixel = center_y_pixel - height_pixel / 2.0;
+        const double min_x_pixel = min_x_norm * active_fx + active_cx;
+        const double min_y_pixel = min_y_norm * active_fy + active_cy;
+        const double width_pixel = width_norm * active_fx;
+        const double height_pixel = height_norm * active_fy;
 
         sensor_msgs::msg::RegionOfInterest roi_msg;
         roi_msg.x_offset = static_cast<uint32_t>(std::max(0.0, std::round(min_x_pixel)));
@@ -501,23 +493,6 @@ private:
         roi_msg.do_rectify = !(distance < params_.roi_distance_threshold);   // this is a boolean paramter for roi will be used or not 
         
         roi_pub_->publish(roi_msg);
-
-        // Dynamic ROI based on +-3 sigma
-        const double dynamic_width_pixel = 6.0 * sigma_x * active_fx;
-        const double dynamic_height_pixel = 6.0 * sigma_y * active_fy;
-
-        const double dynamic_min_x_pixel = center_x_pixel - dynamic_width_pixel / 2.0;
-        const double dynamic_min_y_pixel = center_y_pixel - dynamic_height_pixel / 2.0;
-
-        sensor_msgs::msg::RegionOfInterest dynamic_roi_msg;
-        dynamic_roi_msg.x_offset = static_cast<uint32_t>(std::max(0.0, std::round(dynamic_min_x_pixel)));
-        dynamic_roi_msg.y_offset = static_cast<uint32_t>(std::max(0.0, std::round(dynamic_min_y_pixel)));
-        dynamic_roi_msg.width = static_cast<uint32_t>(std::max(0.0, std::round(dynamic_width_pixel)));
-        dynamic_roi_msg.height = static_cast<uint32_t>(std::max(0.0, std::round(dynamic_height_pixel)));
-        
-        dynamic_roi_msg.do_rectify = !(distance < params_.roi_distance_threshold);   // same rectify logic as fixed roi
-        
-        dynamic_roi_pub_->publish(dynamic_roi_msg);
 
         // Publish zoom_out: true = use camera 1, false = use camera 2
         std_msgs::msg::Bool zoom_out_msg;
@@ -592,9 +567,7 @@ private:
     rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr interceptor_state_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr pbar_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr pbar_uncertainty_pub_;
     rclcpp::Publisher<sensor_msgs::msg::RegionOfInterest>::SharedPtr roi_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::RegionOfInterest>::SharedPtr dynamic_roi_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr relative_position_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr zoom_out_pub_;
     rclcpp::TimerBase::SharedPtr diag_timer_;

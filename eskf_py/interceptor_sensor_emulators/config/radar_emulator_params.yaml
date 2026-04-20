@@ -10,9 +10,9 @@
     dt: 2.0
     max_state_age_sec: 2.0
     velocity_source: "reported"
-    rmse_range: 3.0
-    rmse_azimuth_deg: 1.3
-    rmse_elevation_deg: 3.3
+    rmse_range: 1.0
+    rmse_azimuth_deg: 0.5
+    rmse_elevation_deg: 0.5
     rmse_doppler: 0.5
     random_seed: -1
     log_dir: "/home/ituarc/Documents/Github/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/radar"

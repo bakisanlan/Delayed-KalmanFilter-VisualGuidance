@@ -27,4 +27,4 @@ def generate_launch_description():
         parameters=[radar_config],
     )
 
-    return LaunchDescription([camera_node, radar_node])
+    return LaunchDescription([radar_node])

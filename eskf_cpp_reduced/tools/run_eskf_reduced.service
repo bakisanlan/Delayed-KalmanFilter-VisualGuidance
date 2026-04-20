@@ -7,6 +7,8 @@ Type=simple
 User=ituarc
 Environment="HOME=/home/ituarc"
 ExecStart=/home/ituarc/ros2_ws/src/eskf_cpp_reduced/tools/run_eskf_reduced.sh
+KillMode=mixed
+TimeoutStopSec=10
 Restart=on-failure
 RestartSec=15
 

@@ -82,6 +82,25 @@ bool EskfLogger::start(const std::string& log_dir, double rate_hz) {
           << "P_vt_x,P_vt_y,P_vt_z,"
           << "P_pbar_x,P_pbar_y\n";
 
+    // Open radar measurement CSV
+    std::string radar_csv = current_filename_prefix_ + "_radar.csv";
+    std::filesystem::path radar_path = dir_path / radar_csv;
+    radar_file_.open(radar_path.string(), std::ios::out | std::ios::trunc);
+    if (radar_file_.is_open()) {
+        radar_file_ << "timestamp,"
+                    << "meas_pos_n,meas_pos_e,meas_pos_d,"
+                    << "meas_vel_n,meas_vel_e,meas_vel_d\n";
+    }
+
+    // Open camera measurement CSV
+    std::string camera_csv = current_filename_prefix_ + "_camera.csv";
+    std::filesystem::path camera_path = dir_path / camera_csv;
+    camera_file_.open(camera_path.string(), std::ios::out | std::ios::trunc);
+    if (camera_file_.is_open()) {
+        camera_file_ << "timestamp,"
+                     << "meas_pbar_x,meas_pbar_y\n";
+    }
+
     is_logging_ = true;
     PRINT_INFO(GREEN "[LOGGER]: Started logging to '%s' (Rate: %.1f Hz)" RESET "\n",
                file_path.string().c_str(), rate_hz)
@@ -123,6 +142,27 @@ void EskfLogger::logState(double timestamp,
           << P_diag(reduced::error_idx::DPBAR_START + 1) << "\n";
 }
 
+void EskfLogger::logRadarMeasurement(double timestamp,
+                                      const reduced::RadarMeasurement& z_target) {
+    if (!is_logging_ || !radar_file_.is_open()) {
+        return;
+    }
+
+    radar_file_ << std::fixed << std::setprecision(6) << timestamp << ","
+                << z_target(0) << "," << z_target(1) << "," << z_target(2) << ","
+                << z_target(3) << "," << z_target(4) << "," << z_target(5) << "\n";
+}
+
+void EskfLogger::logImageMeasurement(double timestamp,
+                                      const Vector2d& z_pbar) {
+    if (!is_logging_ || !camera_file_.is_open()) {
+        return;
+    }
+
+    camera_file_ << std::fixed << std::setprecision(6) << timestamp << ","
+                 << z_pbar(0) << "," << z_pbar(1) << "\n";
+}
+
 void EskfLogger::stop() {
     if (is_logging_ && file_.is_open()) {
         file_.flush();
@@ -130,34 +170,43 @@ void EskfLogger::stop() {
         PRINT_INFO(GREEN "[LOGGER]: Stopped logging and closed CSV" RESET "\n")
         eskf::Printer::closeLogFile();
     }
+    if (radar_file_.is_open()) {
+        radar_file_.flush();
+        radar_file_.close();
+    }
+    if (camera_file_.is_open()) {
+        camera_file_.flush();
+        camera_file_.close();
+    }
     is_logging_ = false;
     last_log_time_ = -1.0;
 }
 
-int EskfLogger::findNextCounter(const std::string& log_dir) const {
-    int max_counter = 0;
-    std::regex counter_regex(R"(^(\d{4})_.*\.log$)");
+int EskfLogger::findNextCounter(const std::string& log_dir) {
+    int counter = 1;
+    std::filesystem::path counter_file = std::filesystem::path(log_dir) / "log_counter.txt";
 
-    try {
-        if (std::filesystem::exists(log_dir) && std::filesystem::is_directory(log_dir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(log_dir)) {
-                if (entry.is_regular_file()) {
-                    std::string filename = entry.path().filename().string();
-                    std::smatch match;
-                    if (std::regex_match(filename, match, counter_regex)) {
-                        int counter = std::stoi(match[1].str());
-                        if (counter > max_counter) {
-                            max_counter = counter;
-                        }
-                    }
-                }
-            }
+    // Read the current counter
+    if (std::filesystem::exists(counter_file)) {
+        std::ifstream in(counter_file.string());
+        if (in.is_open()) {
+            in >> counter;
+            in.close();
+        } else {
+            PRINT_WARNING(YELLOW "[LOGGER]: Error reading log_counter.txt" RESET "\n")
         }
-    } catch (const std::exception& e) {
-        PRINT_WARNING(YELLOW "[LOGGER]: Error scanning directory for counters: %s" RESET "\n", e.what())
     }
 
-    return max_counter + 1;
+    // Increment and write the next counter back to the file
+    std::ofstream out(counter_file.string(), std::ios::trunc);
+    if (out.is_open()) {
+        out << std::setw(4) << std::setfill('0') << (counter + 1) << "\n";
+        out.close();
+    } else {
+        PRINT_WARNING(YELLOW "[LOGGER]: Error writing to log_counter.txt" RESET "\n")
+    }
+
+    return counter;
 }
 
 } // namespace eskf

@@ -38,6 +38,16 @@ public:
                   const reduced::ErrorCovariance& P);
 
     /**
+     * @brief Log a radar measurement (target state) at a given timestamp.
+     */
+    void logRadarMeasurement(double timestamp, const reduced::RadarMeasurement& z_target);
+
+    /**
+     * @brief Log a camera/image measurement (pbar) at a given timestamp.
+     */
+    void logImageMeasurement(double timestamp, const Vector2d& z_pbar);
+
+    /**
      * @brief Stop logging and close the CSV.
      */
     void stop();
@@ -45,9 +55,11 @@ public:
     bool isLogging() const { return is_logging_; }
 
 private:
-    int findNextCounter(const std::string& log_dir) const;
+    int findNextCounter(const std::string& log_dir);
 
     std::ofstream file_;
+    std::ofstream radar_file_;
+    std::ofstream camera_file_;
     bool is_logging_ = false;
     double log_period_ = 0.0;
     double last_log_time_ = -1.0;

@@ -6,13 +6,16 @@ topics:
   interceptor_state: "/mavros/state" # mavros state topic
   output_state: "/eskf_reduced/odom"
   output_pose: "/eskf_reduced/pbar"
+  output_pbar_uncertainty: "/eskf_reduced/pbar_unc"
   output_roi: "/interceptor/camera/inference_roi"
+  output_roi_dynamic: "/interceptor/camera/inference_roi_dynamic"
   output_relative_position: "/eskf_reduced/pr"
+  output_zoom_out: "/eskf_reduced/zoom_out"
 
 timing:
   imu_rate_hz: 200
   eskf_rate_hz: 200
-  image_delay_ms: 150
+  image_delay_ms: 80
   image_timeout_sec: 1.0
 
 delay_compensation:
@@ -29,7 +32,7 @@ radar:
   measurement_is_relative: false
 
 reduced_filter:
-  target_rw_sigma: 1.5
+  target_rw_sigma: 1.0
 
 initial_covariance:
   position: 5.0
@@ -42,10 +45,31 @@ camera:
           1, 0, 0]
   min_depth: 1
   roi_distance_threshold: 40.0
-  fx: 1238.10428
-  fy: 1238.78782
-  cx: 960.0
-  cy: 540.0
+  camera_switch_distance: 70.0  # -1 = single camera only; >0 = switch to camera2 when distance > this value
+  fx: 2476.20856 # 4k
+  fy: 2477.57564
+  cx: 1920.0
+  cy: 1080.0
+  # fx: 1238.10428 # 1080p
+  # fy: 1238.78782
+  # cx: 960.0
+  # cy: 540.0
+  # fx: 1988.47063182 #1238.10428
+  # fy: 1988.20715551 #1238.78782
+  # cx: 970.41520111 #960.0
+  # cy: 612.61767572 #540.0
+
+# Camera 2 intrinsics (long-range, used when distance > camera_switch_distance)
+# 8mm 1920, 1080
+camera2:
+  fx: 4427.37720842 # 4k
+  fy: 4405.51593746
+  cx: 1920.0
+  cy: 1080.0
+  # fx: 2213.68860421 # 1080p
+  # fy: 2202.75796873
+  # cx: 960.0
+  # cy: 540.0
 
 history:
   buffer_length: 40

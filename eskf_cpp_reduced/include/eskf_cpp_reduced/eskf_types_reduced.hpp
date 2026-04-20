@@ -36,8 +36,11 @@ struct ESKFParams {
     std::string topic_interceptor_state = "/interceptor/state";
     std::string topic_odom = "/eskf_reduced/odom";
     std::string topic_pbar = "/eskf_reduced/pbar";
+    std::string topic_pbar_uncertainty = "/eskf_reduced/pbar_unc";
     std::string topic_roi = "/eskf_reduced/roi";
+    std::string topic_roi_dynamic = "/eskf_reduced/roi_dynamic";
     std::string topic_relative_position = "/eskf_reduced/relative_position";
+    std::string topic_zoom_out = "/eskf_reduced/zoom_out";
     
     double dt_imu = 1.0 / 200.0;
     double dt_eskf = 1.0 / 200.0;
@@ -76,10 +79,22 @@ struct ESKFParams {
     double min_depth = 0.1;
     double roi_distance_threshold = 100.0;
     
+    // Camera 1 intrinsics (default / close-range)
     double fx = 1000.0;
     double fy = 1000.0;
     double cx = 320.0;
     double cy = 240.0;
+    
+    // Camera 2 intrinsics (long-range)
+    double fx2 = 1000.0;
+    double fy2 = 1000.0;
+    double cx2 = 320.0;
+    double cy2 = 240.0;
+    
+    /// Distance threshold for camera switching.
+    /// If distance > camera_switch_distance → use camera 2 intrinsics for ROI.
+    /// If -1 → always use camera 1.
+    double camera_switch_distance = -1.0;
     
     bool log_enabled = false;
     double log_rate_hz = 20.0;

@@ -5,17 +5,13 @@
 
 #include "eskf_cpp_reduced/eskf_config.hpp"
 #include "eskf_cpp_reduced/eskf_core_reduced.hpp"
-#include "eskf_cpp_reduced/eskf_logger.hpp"
 #include "eskf_cpp_reduced/utils/print.hpp"
 
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <mavros_msgs/msg/state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <sensor_msgs/msg/region_of_interest.hpp>
-#include <std_msgs/msg/bool.hpp>
 
 #include <algorithm>
 #include <array>
@@ -39,19 +35,9 @@ public:
         if (!config_file.empty()) {
             try {
                 params_ = eskf::loadConfig(config_file);
-                if (params_.log_enabled) {
-                    logger_.initTerminalLog(params_.log_dir);
-                }
                 PRINT_INFO(GREEN "[CONFIG-RED]: Loaded from %s" RESET "\n", config_file.c_str())
             } catch (const std::exception& e) {
-                if (params_.log_enabled) {
-                    logger_.initTerminalLog(params_.log_dir);
-                }
                 PRINT_WARNING(YELLOW "[CONFIG-RED]: Failed to load: %s. Using defaults." RESET "\n", e.what())
-            }
-        } else {
-            if (params_.log_enabled) {
-                logger_.initTerminalLog(params_.log_dir);
             }
         }
         eskf::printConfig(params_);
@@ -73,21 +59,12 @@ public:
             params_.topic_radar, 10,
             std::bind(&ReducedESKFNode::radarCallback, this, std::placeholders::_1));
 
-        interceptor_state_sub_ = this->create_subscription<mavros_msgs::msg::State>(
-            params_.topic_interceptor_state, 10,
-            std::bind(&ReducedESKFNode::interceptorStateCallback, this, std::placeholders::_1));
-
         interceptor_odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             params_.topic_interceptor_odom, imu_qos,
             std::bind(&ReducedESKFNode::interceptorOdomCallback, this, std::placeholders::_1));
 
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>(params_.topic_odom, 10);
         pbar_pub_ = this->create_publisher<geometry_msgs::msg::Point>(params_.topic_pbar, 10);
-        pbar_uncertainty_pub_ = this->create_publisher<geometry_msgs::msg::Point>(params_.topic_pbar_uncertainty, 10);
-        roi_pub_ = this->create_publisher<sensor_msgs::msg::RegionOfInterest>(params_.topic_roi, 10);
-        dynamic_roi_pub_ = this->create_publisher<sensor_msgs::msg::RegionOfInterest>(params_.topic_roi_dynamic, 10);
-        relative_position_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>(params_.topic_relative_position, 10);
-        zoom_out_pub_ = this->create_publisher<std_msgs::msg::Bool>(params_.topic_zoom_out, 10);
 
         diag_timer_ = this->create_wall_timer(
             1s, std::bind(&ReducedESKFNode::diagnosticsCallback, this));
@@ -95,48 +72,17 @@ public:
         samples_per_eskf_ = std::max(1, static_cast<int>(std::round(params_.dt_eskf / params_.dt_imu)));
         delay_steps_ = static_cast<int>(std::round(params_.image_delay / params_.dt_eskf));
 
-        // Validate: history buffer must be larger than delay_steps with margin
-        constexpr int kHistoryMargin = 5;
-        const int min_history = delay_steps_ + kHistoryMargin;
-        if (params_.history_length < min_history) {
-            PRINT_WARNING(YELLOW "[ESKF-RED]: history_length (%d) is too small for delay_steps (%d) + margin (%d). "
-                          "Auto-correcting to %d." RESET "\n",
-                          params_.history_length, delay_steps_, kHistoryMargin, min_history)
-            params_.history_length = min_history;
-        }
-
         PRINT_INFO(BOLDCYAN "\n[ESKF-RED]: Node initialized" RESET "\n")
         PRINT_INFO(CYAN "  IMU topic:              %s" RESET "\n", params_.topic_imu.c_str())
         PRINT_INFO(CYAN "  Interceptor odom topic: %s" RESET "\n", params_.topic_interceptor_odom.c_str())
         PRINT_INFO(CYAN "  Image topic:            %s" RESET "\n", params_.topic_image.c_str())
         PRINT_INFO(CYAN "  Radar topic:            %s" RESET "\n", params_.topic_radar.c_str())
-        PRINT_INFO(CYAN "  State topic:            %s" RESET "\n", params_.topic_interceptor_state.c_str())
-        PRINT_INFO(CYAN "  Rel pos topic:          %s" RESET "\n", params_.topic_relative_position.c_str())
-        PRINT_INFO(CYAN "  Zoom out topic:         %s" RESET "\n", params_.topic_zoom_out.c_str())
         PRINT_INFO(CYAN "  Samples/update:         %d" RESET "\n", samples_per_eskf_)
         PRINT_INFO(CYAN "  Image delay:            %d steps" RESET "\n", delay_steps_)
         PRINT_WARNING(YELLOW "[ESKF-RED]: Waiting for interceptor odometry and first radar measurement..." RESET "\n")
     }
 
 private:
-    void interceptorStateCallback(const mavros_msgs::msg::State::SharedPtr msg) {
-        bool currently_armed = msg->armed;
-
-        if (currently_armed && !is_armed_) {
-            PRINT_INFO(BOLDGREEN "[STATE-RED]: Interceptor ARMED. Enabling filter initialization & logging." RESET "\n")
-            if (params_.log_enabled) {
-                logger_.start(params_.log_dir, params_.log_rate_hz);
-            }
-        } else if (!currently_armed && is_armed_) {
-            PRINT_INFO(BOLDYELLOW "[STATE-RED]: Interceptor DISARMED. Stopping filter & logging." RESET "\n")
-            if (logger_.isLogging()) {
-                logger_.stop();
-            }
-            is_initialized_ = false; // Reset filter on disarm
-        }
-
-        is_armed_ = currently_armed;
-    }
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
         // so the reduced filter keeps using the IMU gyro for omega.
         const eskf::Vector3d omega_flu(
@@ -153,11 +99,6 @@ private:
 
         filter_->accumulateIMU(omega_frd);
         imu_count_++;
-        
-        // Update pbar using target(radar) and interceptor states when pbar is frozen 
-        if (filter_->isPbarFrozen()) {
-            filter_->updatePbarFromGeometry(interceptor_state_);
-        }
 
         if (imu_count_ >= samples_per_eskf_) {
             const auto avg = filter_->getAveragedIMU(timestamp);
@@ -186,42 +127,18 @@ private:
             return;
         }
 
-        double current_time = this->now().seconds();
-        if (current_time < penalty_freeze_until_) {
-            return;
+        if (filter_->isPbarFrozen()) {
+            filter_->setPbarFrozen(false);
         }
 
+        last_image_time_ = this->now().seconds();
         const eskf::Vector2d z_pbar(msg->point.x, msg->point.y);
-
-        if (logger_.isLogging()) {
-            double timestamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
-            logger_.logImageMeasurement(timestamp, z_pbar);
-        }
-
         const eskf::Vector2d innovation = filter_->correctImage(z_pbar, delay_steps_);
 
-        if (innovation.norm() == 0.0) {
-            consecutive_rejections_++;
-            if (consecutive_rejections_ >= 30) {
-                penalty_freeze_until_ = current_time + params_.image_timeout_sec;
-                consecutive_rejections_ = 0;
-                if (!filter_->isPbarFrozen()) {
-                    filter_->setPbarFrozen(true);
-                }
-                PRINT_WARNING(YELLOW "[IMAGE-RED]: 30 consecutive rejections! Freezing pbar for %.1fs" RESET "\n", params_.image_timeout_sec)
-            }
-        } else {
-            consecutive_rejections_ = 0;
-            last_image_time_ = current_time;
-            if (filter_->isPbarFrozen()) {
-                filter_->setPbarFrozen(false);
-            }
-
-            static int image_log_counter = 0;
-            if (++image_log_counter % 30 == 0) {
-                PRINT_DEBUG(CYAN "[IMAGE-RED]: Innovation = [%.4f, %.4f]" RESET "\n",
-                            innovation(0), innovation(1))
-            }
+        static int image_log_counter = 0;
+        if (innovation.norm() > 0.0 && ++image_log_counter % 30 == 0) {
+            PRINT_DEBUG(CYAN "[IMAGE-RED]: Innovation = [%.4f, %.4f]" RESET "\n",
+                        innovation(0), innovation(1))
         }
     }
 
@@ -243,10 +160,6 @@ private:
             return;
         }
 
-        if (!is_armed_) {
-            return; // Initialization and updates are gated by the arm state
-        }
-
         // print debug for radar measurement
         PRINT_DEBUG(BLUE "[RADAR-RED]: Radar measurement pos=[%.3f, %.3f, %.3f] vel=[%.3f, %.3f, %.3f]" RESET "\n",
                     pending_radar_measurement_(0), pending_radar_measurement_(1), pending_radar_measurement_(2),
@@ -261,21 +174,7 @@ private:
             return;
         }
 
-        // Guard: reinitialize if state has diverged to NaN (rare, from pbar dynamics during agile maneuvers)
-        if (filter_->getState().hasNaN() || filter_->getCovariance().hasNaN()) {
-            PRINT_WARNING(BOLDYELLOW "[ESKF-RED]: NaN detected in filter state/covariance! Reinitializing from radar." RESET "\n")
-            initializeFilter(target_state, pending_radar_noise_);
-            pending_radar_received_ = false;
-            return;
-        }
-
         filter_->notifyRadarReceived();
-
-        if (logger_.isLogging()) {
-            double timestamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
-            logger_.logRadarMeasurement(timestamp, target_state);
-        }
-
         const eskf::reduced::RadarMeasurement innovation =
             filter_->correctRadar(target_state, pending_radar_noise_);
 
@@ -312,7 +211,7 @@ private:
         interceptor_state_.R_b2e = R_b2e;
         interceptor_state_received_ = true;
 
-        if (is_armed_ && !is_initialized_ && pending_radar_received_) {
+        if (!is_initialized_ && pending_radar_received_) {
             initializeFilter(
                 computeTargetStateMeasurement(pending_radar_measurement_),
                 pending_radar_noise_);
@@ -345,7 +244,7 @@ private:
         radar_noise.block<3, 3>(3, 3) = eskf::math::buildCovarianceBlock3x3(
             msg.twist.covariance, fallback_vel);
 
-        return radar_noise * params_.radar_noise_inflation;
+        return radar_noise;
     }
 
     void initializeFilter(const eskf::reduced::RadarMeasurement& z_target,
@@ -361,15 +260,7 @@ private:
             p_t_init, interceptor_state_, params_.R_b2c, params_.min_depth);
         x_init.segment<2>(eskf::reduced::nominal_idx::PBAR_START) = pbar_init;
 
-        // Reconstruct default initial covariance instead of retrieving corrupted covariance
-        eskf::reduced::ErrorCovariance P_init = eskf::reduced::ErrorCovariance::Zero();
-        P_init.block<3, 3>(eskf::reduced::error_idx::DPT_START, eskf::reduced::error_idx::DPT_START) =
-            params_.init_sigma_position * params_.init_sigma_position * Eigen::Matrix3d::Identity();
-        P_init.block<3, 3>(eskf::reduced::error_idx::DVT_START, eskf::reduced::error_idx::DVT_START) =
-            params_.init_sigma_velocity * params_.init_sigma_velocity * Eigen::Matrix3d::Identity();
-        P_init.block<2, 2>(eskf::reduced::error_idx::DPBAR_START, eskf::reduced::error_idx::DPBAR_START) =
-            params_.init_sigma_pbar * params_.init_sigma_pbar * Eigen::Matrix2d::Identity();
-
+        eskf::reduced::ErrorCovariance P_init = filter_->getCovariance();
         const Eigen::Matrix3d P_pos = radar_noise.block<3, 3>(0, 0);
         P_init.block<3, 3>(eskf::reduced::error_idx::DPT_START,
                            eskf::reduced::error_idx::DPT_START) = P_pos;
@@ -461,91 +352,9 @@ private:
         pbar_msg.y = pbar(1);
         pbar_msg.z = 0.0;
         pbar_pub_->publish(pbar_msg);
-
-        const double sigma_x = std::sqrt(cov_diag(eskf::reduced::error_idx::DPBAR_START + 0));
-        const double sigma_y = std::sqrt(cov_diag(eskf::reduced::error_idx::DPBAR_START + 1));
-
-        geometry_msgs::msg::Point pbar_unc_msg;
-        pbar_unc_msg.x = 3.0 * sigma_x;
-        pbar_unc_msg.y = 3.0 * sigma_y;
-        pbar_unc_msg.z = 0.0;
-        pbar_uncertainty_pub_->publish(pbar_unc_msg);
-        
-        const double distance = (pos - interceptor_state_.position_ned).norm();
-
-        // Select camera intrinsics: use camera 2 when switching is enabled and distance > threshold
-        const bool use_cam2 = (params_.camera_switch_distance > 0.0) &&
-                              (distance > params_.camera_switch_distance);
-        const double active_fx = use_cam2 ? params_.fx2 : params_.fx;
-        const double active_fy = use_cam2 ? params_.fy2 : params_.fy;
-        const double active_cx = use_cam2 ? params_.cx2 : params_.cx;
-        const double active_cy = use_cam2 ? params_.cy2 : params_.cy;
-
-        // Fixed ROI size
-        const double width_pixel = 1280.0;
-        const double height_pixel = 1280.0;
-
-        // pbar gives normalized coordinates. Convert normalized center to pixel coordinates:
-        const double center_x_pixel = pbar(0) * active_fx + active_cx;
-        const double center_y_pixel = pbar(1) * active_fy + active_cy;
-
-        const double min_x_pixel = center_x_pixel - width_pixel / 2.0;
-        const double min_y_pixel = center_y_pixel - height_pixel / 2.0;
-
-        sensor_msgs::msg::RegionOfInterest roi_msg;
-        roi_msg.x_offset = static_cast<uint32_t>(std::max(0.0, std::round(min_x_pixel)));
-        roi_msg.y_offset = static_cast<uint32_t>(std::max(0.0, std::round(min_y_pixel)));
-        roi_msg.width = static_cast<uint32_t>(std::max(0.0, std::round(width_pixel)));
-        roi_msg.height = static_cast<uint32_t>(std::max(0.0, std::round(height_pixel)));
-        
-        roi_msg.do_rectify = !(distance < params_.roi_distance_threshold);   // this is a boolean paramter for roi will be used or not 
-        
-        roi_pub_->publish(roi_msg);
-
-        // Dynamic ROI based on +-3 sigma
-        const double dynamic_width_pixel = 6.0 * sigma_x * active_fx;
-        const double dynamic_height_pixel = 6.0 * sigma_y * active_fy;
-
-        const double dynamic_min_x_pixel = center_x_pixel - dynamic_width_pixel / 2.0;
-        const double dynamic_min_y_pixel = center_y_pixel - dynamic_height_pixel / 2.0;
-
-        sensor_msgs::msg::RegionOfInterest dynamic_roi_msg;
-        dynamic_roi_msg.x_offset = static_cast<uint32_t>(std::max(0.0, std::round(dynamic_min_x_pixel)));
-        dynamic_roi_msg.y_offset = static_cast<uint32_t>(std::max(0.0, std::round(dynamic_min_y_pixel)));
-        dynamic_roi_msg.width = static_cast<uint32_t>(std::max(0.0, std::round(dynamic_width_pixel)));
-        dynamic_roi_msg.height = static_cast<uint32_t>(std::max(0.0, std::round(dynamic_height_pixel)));
-        
-        dynamic_roi_msg.do_rectify = !(distance < params_.roi_distance_threshold);   // same rectify logic as fixed roi
-        
-        dynamic_roi_pub_->publish(dynamic_roi_msg);
-
-        // Publish zoom_out: true = use camera 1, false = use camera 2
-        std_msgs::msg::Bool zoom_out_msg;
-        zoom_out_msg.data = !use_cam2;
-        zoom_out_pub_->publish(zoom_out_msg);
-
-        // Publish relative position reconstructed from pbar + depth + rotations
-        const eskf::Vector3d rel_pos = filter_->getRelativePosition(interceptor_state_);
-        geometry_msgs::msg::PointStamped rel_pos_msg;
-        rel_pos_msg.header.stamp = stamp;
-        rel_pos_msg.header.frame_id = "ned";
-        rel_pos_msg.point.x = rel_pos(0);
-        rel_pos_msg.point.y = rel_pos(1);
-        rel_pos_msg.point.z = rel_pos(2);
-        relative_position_pub_->publish(rel_pos_msg);
-
-        if (logger_.isLogging()) {
-            double timestamp = stamp.seconds();
-            logger_.logState(timestamp, filter_->getState(), filter_->getCovariance());
-        }
     }
 
     void diagnosticsCallback() {
-        if (!is_armed_) {
-            PRINT_WARNING(YELLOW "[ESKF-RED]: Arming is waiting for filter initialization..." RESET "\n")
-            return;
-        }
-        
         if (!is_initialized_) {
             PRINT_WARNING(YELLOW "[ESKF-RED]: Waiting for radar/odometry before initialization..." RESET "\n")
             return;
@@ -583,25 +392,17 @@ private:
 
     eskf::ESKFParams params_;
     std::unique_ptr<eskf::reduced::ReducedErrorStateKalmanFilter> filter_;
-    eskf::EskfLogger logger_;
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr image_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr radar_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr interceptor_odom_sub_;
-    rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr interceptor_state_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr pbar_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr pbar_uncertainty_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::RegionOfInterest>::SharedPtr roi_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::RegionOfInterest>::SharedPtr dynamic_roi_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr relative_position_pub_;
-    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr zoom_out_pub_;
     rclcpp::TimerBase::SharedPtr diag_timer_;
 
     eskf::reduced::InterceptorState interceptor_state_;
     bool interceptor_state_received_ = false;
-    bool is_armed_ = false;
     bool is_initialized_ = false;
     bool pending_radar_received_ = false;
     eskf::reduced::RadarMeasurement pending_radar_measurement_ =
@@ -614,8 +415,6 @@ private:
     int delay_steps_ = 0;
     int prediction_count_ = 0;
     double last_image_time_ = 0.0;
-    double penalty_freeze_until_ = 0.0;
-    int consecutive_rejections_ = 0;
 };
 
 int main(int argc, char** argv) {

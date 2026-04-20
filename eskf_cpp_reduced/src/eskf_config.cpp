@@ -66,8 +66,11 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
         params.topic_interceptor_state = getScalar<std::string>(topics, "interceptor_state", "/interceptor/state");
         params.topic_odom = getScalar<std::string>(topics, "output_state", "/eskf_reduced/odom");
         params.topic_pbar = getScalar<std::string>(topics, "output_pose", "/eskf_reduced/pbar");
+        params.topic_pbar_uncertainty = getScalar<std::string>(topics, "output_pbar_uncertainty", "/eskf_reduced/pbar_uncertainty");
         params.topic_roi = getScalar<std::string>(topics, "output_roi", "/eskf_reduced/roi");
+        params.topic_roi_dynamic = getScalar<std::string>(topics, "output_roi_dynamic", params.topic_roi + "_dynamic");
         params.topic_relative_position = getScalar<std::string>(topics, "output_relative_position", "/eskf_reduced/relative_position");
+        params.topic_zoom_out = getScalar<std::string>(topics, "output_zoom_out", "/eskf_reduced/zoom_out");
     }
     
     // === Timing Parameters ===
@@ -134,6 +137,15 @@ ESKFParams loadConfigFromString(const std::string& yaml_content) {
         params.fy = getScalar<double>(config["camera"], "fy", 1000.0);
         params.cx = getScalar<double>(config["camera"], "cx", 320.0);
         params.cy = getScalar<double>(config["camera"], "cy", 240.0);
+        params.camera_switch_distance = getScalar<double>(config["camera"], "camera_switch_distance", -1.0);
+    }
+    
+    // === Camera 2 configuration ===
+    if (config["camera2"]) {
+        params.fx2 = getScalar<double>(config["camera2"], "fx", params.fx);
+        params.fy2 = getScalar<double>(config["camera2"], "fy", params.fy);
+        params.cx2 = getScalar<double>(config["camera2"], "cx", params.cx);
+        params.cy2 = getScalar<double>(config["camera2"], "cy", params.cy);
     }
     
     // === Chi-Square Gating ===
@@ -181,8 +193,15 @@ void printConfig(const ESKFParams& params) {
     PRINT_INFO(CYAN "  Target rw: %.3f m/s^2" RESET "\n", params.sigma_target_rw)
     PRINT_INFO(CYAN "  Min depth: %.2f m" RESET "\n", params.min_depth)
     PRINT_INFO(CYAN "  ROI Dist Thr: %.1f m" RESET "\n", params.roi_distance_threshold)
-    PRINT_INFO(CYAN "  Camera K:  fx=%.1f fy=%.1f cx=%.1f cy=%.1f" RESET "\n", 
+    PRINT_INFO(CYAN "  Cam1 K:    fx=%.1f fy=%.1f cx=%.1f cy=%.1f" RESET "\n", 
                params.fx, params.fy, params.cx, params.cy)
+    if (params.camera_switch_distance > 0.0) {
+        PRINT_INFO(CYAN "  Cam2 K:    fx=%.1f fy=%.1f cx=%.1f cy=%.1f" RESET "\n", 
+                   params.fx2, params.fy2, params.cx2, params.cy2)
+        PRINT_INFO(CYAN "  Cam Switch: %.1f m" RESET "\n", params.camera_switch_distance)
+    } else {
+        PRINT_INFO(CYAN "  Cam Switch: " YELLOW "disabled (single camera)" RESET "\n")
+    }
     
     PRINT_INFO(BOLDWHITE "\nRadar:" RESET "\n")
     PRINT_INFO(CYAN "  Use vr:    %s" RESET "\n", params.use_vr ? GREEN "yes" RESET : RED "no" RESET)
@@ -208,8 +227,11 @@ void printConfig(const ESKFParams& params) {
     PRINT_INFO(CYAN "  Interceptor state:%s" RESET "\n", params.topic_interceptor_state.c_str())
     PRINT_INFO(CYAN "  Output odom:     %s" RESET "\n", params.topic_odom.c_str())
     PRINT_INFO(CYAN "  Output pbar:     %s" RESET "\n", params.topic_pbar.c_str())
+    PRINT_INFO(CYAN "  Output pbar unc: %s" RESET "\n", params.topic_pbar_uncertainty.c_str())
     PRINT_INFO(CYAN "  Output roi:      %s" RESET "\n", params.topic_roi.c_str())
+    PRINT_INFO(CYAN "  Output roi dyn:  %s" RESET "\n", params.topic_roi_dynamic.c_str())
     PRINT_INFO(CYAN "  Output rel pos:  %s" RESET "\n", params.topic_relative_position.c_str())
+    PRINT_INFO(CYAN "  Output zoom out: %s" RESET "\n", params.topic_zoom_out.c_str())
     
     
     PRINT_INFO(BOLDWHITE "\nInitial Covariance (1-sigma):" RESET "\n")

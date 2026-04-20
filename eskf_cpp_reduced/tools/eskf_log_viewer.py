@@ -43,8 +43,6 @@ import numpy as np
 # Default paths
 LOG_DIR = "/home/ituarc/ros2_ws/src/eskf_cpp_reduced/log"
 CSV_DIR = "/home/ituarc/ros2_ws/src/eskf_cpp_reduced/log"
-RADAR_CSV_DIR = "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/radar"
-CAMERA_CSV_DIR = "/home/ituarc/Documents/GitHub/Delayed-KalmanFilter-VisualGuidance/eskf_py/interceptor_sensor_emulators/log/camera"
 
 # Try to load paths from config
 try:
@@ -57,10 +55,6 @@ try:
             if 'log_dir' in logging_cfg:
                 LOG_DIR = logging_cfg['log_dir']
                 CSV_DIR = logging_cfg['log_dir']
-            if 'radar_csv_dir' in logging_cfg:
-                RADAR_CSV_DIR = logging_cfg['radar_csv_dir']
-            if 'camera_csv_dir' in logging_cfg:
-                CAMERA_CSV_DIR = logging_cfg['camera_csv_dir']
 except Exception as e:
     print(f"Warning: Could not load config file for paths: {e}")
 
@@ -244,25 +238,22 @@ class AnsiParser:
         return text
 
 
-def find_matching_sensor_log(eskf_csv_path: str, sensor_dir: str, tolerance_sec: int = 60) -> str:
-    """Find the corresponding radar or camera log based on file counter."""
+def find_matching_sensor_log(eskf_csv_path: str, sensor_suffix: str) -> str:
+    """Find the corresponding radar or camera log based on file counter and suffix."""
     csv_basename = os.path.basename(eskf_csv_path)
     csv_match = re.search(r'^(\d+)[_-]', csv_basename)
 
     if not csv_match:
         return ""
     
-    csv_counter = int(csv_match.group(1))
+    csv_dir = os.path.dirname(eskf_csv_path)
     
-    if not os.path.exists(sensor_dir):
-        return ""
+    # Just construct the expected filename
+    expected_filename = csv_basename.replace(".csv", f"_{sensor_suffix}.csv")
+    expected_path = os.path.join(csv_dir, expected_filename)
     
-    sensor_logs = glob.glob(os.path.join(sensor_dir, "*.csv"))
-    
-    for log in sensor_logs:
-        match = re.search(r'^(\d+)[_-]', os.path.basename(log))
-        if match and int(match.group(1)) == csv_counter:
-            return log
+    if os.path.exists(expected_path):
+        return expected_path
             
     return ""
 
@@ -495,8 +486,8 @@ class StatePlotterTab(QWidget):
         
         if os.path.exists(CSV_DIR):
             files = sorted(glob.glob(os.path.join(CSV_DIR, "*.csv")), reverse=True)
-            # Filter out small/empty files
-            files = [f for f in files if os.path.getsize(f) > 1000]
+            # Filter out small/empty files, and also radar/camera files themselves
+            files = [f for f in files if os.path.getsize(f) > 1000 and "_radar" not in f and "_camera" not in f]
             for f in files:
                 size_mb = os.path.getsize(f) / (1024 * 1024)
                 self.file_combo.addItem(f"{os.path.basename(f)} ({size_mb:.1f} MB)", f)
@@ -531,25 +522,39 @@ class StatePlotterTab(QWidget):
             self.radar_df = None
             self.camera_df = None
             
-            radar_path = find_matching_sensor_log(filepath, RADAR_CSV_DIR)
+            # Try to find and load matching sensor logs
+            self.radar_df = None
+            self.camera_df = None
+            
+            radar_path = find_matching_sensor_log(filepath, "radar")
             if radar_path:
                 print('radar_path is not None')
-                self.radar_df = pd.read_csv(radar_path)
-                if 'timestamp' in self.radar_df.columns:
-                    self.radar_df['time'] = self.radar_df['timestamp'] - self.eskf_t0
-                self.radar_status.setText(f"Radar: ✓ {os.path.basename(radar_path)}")
-                self.radar_status.setStyleSheet("color: #a6e3a1; font-size: 11px;")
+                try:
+                    self.radar_df = pd.read_csv(radar_path)
+                    if 'timestamp' in self.radar_df.columns:
+                        self.radar_df['time'] = self.radar_df['timestamp'] - self.eskf_t0
+                    self.radar_status.setText(f"Radar: ✓ {os.path.basename(radar_path)}")
+                    self.radar_status.setStyleSheet("color: #a6e3a1; font-size: 11px;")
+                except pd.errors.EmptyDataError:
+                    self.radar_df = None
+                    self.radar_status.setText("Radar: Empty log file")
+                    self.radar_status.setStyleSheet("color: #f9e2af; font-size: 11px;")
             else:
                 self.radar_status.setText("Radar: No log found")
                 self.radar_status.setStyleSheet("color: #f9e2af; font-size: 11px;")
                 
-            camera_path = find_matching_sensor_log(filepath, CAMERA_CSV_DIR)
+            camera_path = find_matching_sensor_log(filepath, "camera")
             if camera_path:
-                self.camera_df = pd.read_csv(camera_path)
-                if 'timestamp' in self.camera_df.columns:
-                    self.camera_df['time'] = self.camera_df['timestamp'] - self.eskf_t0
-                self.camera_status.setText(f"Camera: ✓ {os.path.basename(camera_path)}")
-                self.camera_status.setStyleSheet("color: #a6e3a1; font-size: 11px;")
+                try:
+                    self.camera_df = pd.read_csv(camera_path)
+                    if 'timestamp' in self.camera_df.columns:
+                        self.camera_df['time'] = self.camera_df['timestamp'] - self.eskf_t0
+                    self.camera_status.setText(f"Camera: ✓ {os.path.basename(camera_path)}")
+                    self.camera_status.setStyleSheet("color: #a6e3a1; font-size: 11px;")
+                except pd.errors.EmptyDataError:
+                    self.camera_df = None
+                    self.camera_status.setText("Camera: Empty log file")
+                    self.camera_status.setStyleSheet("color: #f9e2af; font-size: 11px;")
             else:
                 self.camera_status.setText("Camera: No log found")
                 self.camera_status.setStyleSheet("color: #f9e2af; font-size: 11px;")
@@ -632,6 +637,9 @@ class StatePlotterTab(QWidget):
             if est_df is not None and est_col in est_df.columns:
                 ax.plot(est_df['time'], est_df[est_col], color='#a6e3a1', label='Estimated', linewidth=1.5)
                 
+                plot_min = None
+                plot_max = None
+                
                 # Plot Covariance Bounds
                 if cov_col in est_df.columns:
                     var = est_df[cov_col]
@@ -644,6 +652,23 @@ class StatePlotterTab(QWidget):
                         upper = (est_df[est_col] + 3*std_dev)[valid]
                         lower = (est_df[est_col] - 3*std_dev)[valid]
                         ax.fill_between(time_valid, lower, upper, color='#a6e3a1', alpha=0.2, label='±3σ Bound')
+                        plot_min = lower.min()
+                        plot_max = upper.max()
+                
+                if 'Pbar' in title:
+                    ax.set_ylim(-1.0, 1.0)
+                else:
+                    if plot_min is None or plot_max is None or pd.isna(plot_min) or pd.isna(plot_max):
+                        valid_est = est_df[est_col].replace([np.inf, -np.inf], np.nan).dropna()
+                        if not valid_est.empty:
+                            plot_min = valid_est.min()
+                            plot_max = valid_est.max()
+                            
+                    if plot_min is not None and plot_max is not None and pd.notna(plot_min) and pd.notna(plot_max):
+                        margin = (plot_max - plot_min) * 0.05
+                        if margin == 0:
+                            margin = 0.1
+                        ax.set_ylim(plot_min - margin, plot_max + margin)
                                     
             ax.set_title(title, color='#cdd6f4', fontsize=11, fontweight='bold')
             ax.set_ylabel(ylabel, color='#6c7086', fontsize=9)

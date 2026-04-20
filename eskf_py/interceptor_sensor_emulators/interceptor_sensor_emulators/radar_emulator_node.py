@@ -170,6 +170,8 @@ class RadarEmulatorNode(Node):
             depth=10,
         )
 
+        self._log_info(f"_home_position_topic: {self._home_position_topic}")
+
         self._home_sub = self.create_subscription(
             HomePosition,
             self._home_position_topic,
