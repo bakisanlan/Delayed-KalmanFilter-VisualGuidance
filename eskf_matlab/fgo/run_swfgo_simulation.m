@@ -25,11 +25,11 @@ rng(32)
 
 %% ======================== SIMULATION PARAMETERS ========================
 dt_truth  = 1/200;       % Truth propagation rate          [s]
-dt_fgo    = 1/10;        % FGO node spacing                [s]
-dt_cam    = 1/10;        % Camera measurement rate         [s]
+dt_fgo    = 1/20;        % FGO node spacing                [s]
+dt_cam    = 1/30;        % Camera measurement rate         [s]
 dt_radar  = 1/0.5;       % Radar measurement rate          [s]
 t_total   = 30;          % Total simulation time            [s]
-t_delay   = 80/1000;     % Camera processing delay          [s]
+t_delay   = 0/1000;     % Camera processing delay          [s]
 D_nodes   = round(t_delay / dt_fgo);   % Delay in FGO nodes (= 1)
 
 % -----------------------------------------------------------------------
@@ -186,6 +186,8 @@ dt     = dt_fgo;
 sigma2 = sigma_tgt_rw^2;
 Sigma_dyn = sigma2 * [dt^4/4*eye(3), dt^3/2*eye(3);
                       dt^3/2*eye(3), dt^2*eye(3)] + 1e-10*eye(6);
+% Sigma_dyn = 1e-10*eye(6);
+% Sigma_dyn(4:6,4:6) = eye(3) * sigma2*dt;
 
 % Prior for node 1
 x0_true    = [p_tgt_fgo(:,1); v_tgt_fgo(:,1)];
@@ -199,7 +201,9 @@ P_diag     = zeros(state_dim, N_fgo);
 step_costs  = zeros(N_fgo, 1);   % final GN cost at each time step
 
 % ---- Initialise solver with first node ----
-sw = SlidingWindowFGO(W, state_dim);
+% sw = SlidingWindowFGO(W, state_dim);
+sw = SimpleSlidingWindowFGO(W, state_dim);
+
 sw.initFirstNode(1, x0_prior, P_prior);
 
 % Add radar at node 1 if applicable

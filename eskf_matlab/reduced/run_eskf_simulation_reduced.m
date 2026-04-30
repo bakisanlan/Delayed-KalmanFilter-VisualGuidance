@@ -8,10 +8,10 @@ rng(32)
 
 %% ======================== SIMULATION PARAMETERS ========================
 dt_imu = 1/200;           % IMU / truth propagation rate [Hz]
-dt_eskf = 1/200;          % Reduced filter prediction rate [Hz]
+dt_eskf = 1/100;          % Reduced filter prediction rate [Hz]
 dt_image = 1/30;          % Image update rate [Hz]
 dt_radar = 1/0.5;         % RADAR update rate [Hz]
-t_delay = 80/1000;         % Image processing delay [s]
+t_delay = 0/1000;         % Image processing delay [s]
 t_total = 80;             % Total simulation time [s]
 D = round(t_delay / dt_imu);
 

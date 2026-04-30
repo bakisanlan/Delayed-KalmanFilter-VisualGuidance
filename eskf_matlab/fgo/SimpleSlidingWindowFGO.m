@@ -1,4 +1,4 @@
-classdef SlidingWindowFGO < handle
+classdef SimpleSlidingWindowFGO < handle
     % SLIDINGWINDOWFGO  Online sliding-window factor graph optimizer.
     %
     % Maintains a window of at most W variable nodes.  At each time step a
@@ -50,7 +50,7 @@ classdef SlidingWindowFGO < handle
         % ==============================================================
         %  CONSTRUCTOR
         % ==============================================================
-        function obj = SlidingWindowFGO(W, state_dim)
+        function obj = SimpleSlidingWindowFGO(W, state_dim)
             obj.W              = W;
             obj.state_dim      = state_dim;
             obj.abs_indices    = zeros(1, W);
@@ -288,26 +288,13 @@ classdef SlidingWindowFGO < handle
         function [J_sp, r_vec] = buildWhitenedSystem(obj)
             % Assemble the whitened Jacobian (sparse) and residual vector
             % for all active factors and the marginalisation prior.
-            %
-            %  Column layout:  [ x_{slot1} | x_{slot2} | ... | x_{slotN} ]
-            %  each block is state_dim-wide.
+            % (SIMPLIFIED VERSION FOR READABILITY)
 
             sd        = obj.state_dim;
             n_tot_dim = obj.n_active * sd;
 
-            % Pre-allocate triplet arrays (generous upper bound)
-            mp_cap   = 0;
-            if obj.has_marg_prior
-                n_mp   = length(obj.marg_prior.keys);
-                mp_cap = (n_mp * sd)^2;
-            end
-            cap  = obj.n_factors * sd * sd * 4 + mp_cap + 100;
-            tr_r = zeros(cap, 1);
-            tr_c = zeros(cap, 1);
-            tr_v = zeros(cap, 1);
-            nnz_cnt  = 0;
-            res_list = zeros(0, 1);
-            row_off  = 0;
+            J_dense = [];
+            r_vec   = [];
 
             % --- Factor contributions ---
             for i = 1:obj.n_factors
@@ -326,26 +313,18 @@ classdef SlidingWindowFGO < handle
 
                 [r_i, J_blks] = obj.evaluateFactor(f, slots);
                 r_w     = f.sqrt_info * r_i;
+                r_vec   = [r_vec; r_w]; %#ok<AGROW>
+                
+                % Build the dense row block for this factor
                 res_dim = length(r_w);
-                res_list = [res_list; r_w]; %#ok<AGROW>
+                J_row = zeros(res_dim, n_tot_dim);
 
                 for bi = 1:n_keys
                     J_w     = f.sqrt_info * J_blks{bi};
-                    col_off = (slots(bi) - 1) * sd;
-                    [nr, nc] = size(J_w);
-                    for jr = 1:nr
-                        for jc = 1:nc
-                            v = J_w(jr, jc);
-                            if abs(v) > 1e-15
-                                nnz_cnt = nnz_cnt + 1;
-                                tr_r(nnz_cnt) = row_off + jr;
-                                tr_c(nnz_cnt) = col_off + jc;
-                                tr_v(nnz_cnt) = v;
-                            end
-                        end
-                    end
+                    col_idx = (slots(bi) - 1) * sd + 1;
+                    J_row(:, col_idx : col_idx + sd - 1) = J_w;
                 end
-                row_off = row_off + res_dim;
+                J_dense = [J_dense; J_row]; %#ok<AGROW>
             end
 
             % --- Marginalisation prior contribution ---
@@ -373,43 +352,25 @@ classdef SlidingWindowFGO < handle
                     % Whitened residual
                     r_mp   = x_b_cur - mp.mu;
                     r_w_mp = mp.sqrt_info * r_mp;
-                    res_list = [res_list; r_w_mp]; %#ok<AGROW>
+                    r_vec  = [r_vec; r_w_mp]; %#ok<AGROW>
 
                     % Dense whitened Jacobian: J_w = sqrt_info (identity Jacobian)
                     J_full = mp.sqrt_info;   % n_b x n_b
+                    J_row  = zeros(n_b, n_tot_dim);
 
                     for bi = 1:n_mp
-                        col_off  = (slots_mp(bi) - 1) * sd;
-                        col_in_J = (bi-1)*sd + (1:sd);    % block col in J_full
-                        J_blk    = J_full(:, col_in_J);   % n_b x sd
-
-                        [nr, nc] = size(J_blk);
-                        for jr = 1:nr
-                            for jc = 1:nc
-                                v = J_blk(jr, jc);
-                                if abs(v) > 1e-15
-                                    nnz_cnt = nnz_cnt + 1;
-                                    if nnz_cnt > length(tr_r)
-                                        % Dynamic growth (rare)
-                                        tr_r = [tr_r; zeros(cap,1)]; %#ok<AGROW>
-                                        tr_c = [tr_c; zeros(cap,1)]; %#ok<AGROW>
-                                        tr_v = [tr_v; zeros(cap,1)]; %#ok<AGROW>
-                                    end
-                                    tr_r(nnz_cnt) = row_off + jr;
-                                    tr_c(nnz_cnt) = col_off + jc;
-                                    tr_v(nnz_cnt) = v;
-                                end
-                            end
-                        end
+                        col_in_full = (bi-1)*sd + 1;
+                        J_blk = J_full(:, col_in_full : col_in_full + sd - 1);
+                        
+                        col_in_J_dense = (slots_mp(bi) - 1) * sd + 1;
+                        J_row(:, col_in_J_dense : col_in_J_dense + sd - 1) = J_blk;
                     end
-                    row_off = row_off + n_b;
+                    J_dense = [J_dense; J_row]; %#ok<AGROW>
                 end
             end
 
-            % Assemble sparse matrix
-            J_sp  = sparse(tr_r(1:nnz_cnt), tr_c(1:nnz_cnt), tr_v(1:nnz_cnt), ...
-                           row_off, n_tot_dim);
-            r_vec = res_list;
+            % Assemble final sparse matrix
+            J_sp = sparse(J_dense);
         end
 
         % --------------------------------------------------------------
